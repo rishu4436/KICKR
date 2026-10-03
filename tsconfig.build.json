@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": [
+    "api/**/*.ts",
+    "domain/**/*.ts",
+    "db/**/*.ts",
+    "auth/**/*.ts",
+    "rbac/**/*.ts",
+    "audit/**/*.ts",
+    "redis/**/*.ts",
+    "config/**/*.ts",
+    "workers/**/*.ts",
+    "shared/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules", "coverage", "tests"]
+}

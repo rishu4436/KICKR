@@ -1,0 +1,83 @@
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import { InMemoryAuditStore } from "../audit/memory.js";
+import { InMemoryAccountRepository, InMemoryNonceRepository, InMemorySessionRepository } from "../auth/memory.js";
+import { AuthService } from "../auth/service.js";
+import type { AppConfig } from "../config/types.js";
+import { InMemoryGrantRepository } from "../rbac/grants.js";
+import { InMemoryRedis } from "../redis/client.js";
+import type { Clock } from "../shared/clock.js";
+import { silentLogger } from "../shared/logger.js";
+import { createApp, type AppDeps } from "../api/server.js";
+
+export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
+  const pair = nacl.sign.keyPair();
+  return { publicKey: bs58.encode(pair.publicKey), secretKey: pair.secretKey };
+}
+
+export function signMessage(message: string, secretKey: Uint8Array): string {
+  const signature = nacl.sign.detached(new TextEncoder().encode(message), secretKey);
+  return bs58.encode(signature);
+}
+
+export function testConfig(overrides?: {
+  databaseUrl?: string;
+  redisUrl?: string;
+  solanaRpcUrl?: string;
+}): AppConfig {
+  return {
+    public: {
+      appName: "KICKR",
+      environment: "test",
+      authDomain: "localhost",
+      solanaCluster: "devnet",
+      sportsDataProvider: "unset",
+    },
+    server: {
+      nodeEnv: "test",
+      port: 3000,
+      logLevel: "error",
+      auth: {
+        domain: "localhost",
+        nonceTtlSeconds: 300,
+        sessionTtlSeconds: 3600,
+      },
+      rateLimit: { authMax: 30, authWindowSeconds: 60 },
+      solana: { cluster: "devnet" },
+      sportsData: { provider: "unset" },
+    },
+    secrets: {
+      databaseUrl: overrides?.databaseUrl ?? "postgres://kickr:supersecretpassword@localhost:5432/kickr",
+      redisUrl: overrides?.redisUrl ?? "redis://:redis-secret-password@localhost:6379",
+      solanaRpcUrl: overrides?.solanaRpcUrl ?? "https://rpc.example/?api-key=solana-secret-key",
+    },
+  };
+}
+
+export function buildTestApp(clock: Clock): {
+  app: ReturnType<typeof createApp>;
+  deps: AppDeps;
+  grants: InMemoryGrantRepository;
+  audit: InMemoryAuditStore;
+} {
+  const config = testConfig();
+  const audit = new InMemoryAuditStore();
+  const auth = new AuthService(
+    new InMemoryAccountRepository(),
+    new InMemoryNonceRepository(),
+    new InMemorySessionRepository(),
+    audit,
+    config.server.auth,
+  );
+  const grants = new InMemoryGrantRepository();
+  const deps: AppDeps = {
+    config,
+    auth,
+    grants,
+    audit,
+    redis: new InMemoryRedis(),
+    logger: silentLogger(),
+    clock,
+  };
+  return { app: createApp(deps), deps, grants, audit };
+}

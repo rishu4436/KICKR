@@ -1,0 +1,21 @@
+# Local Postgres (authoritative) and Redis (cache only).
+# The password below is a local placeholder, not a production secret.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: kickr
+      POSTGRES_PASSWORD: kickr
+      POSTGRES_DB: kickr
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kickr -d kickr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
