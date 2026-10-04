@@ -501,7 +501,9 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
     },
     async listEntries(contestId) {
       const result = await db.query<Row>(
-        `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at, created_at, updated_at
+        `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                mint, vault_address, deposit_receipt, created_at, updated_at
          FROM contest_entries WHERE contest_id = $1 ORDER BY seat_number`,
         [contestId],
       );
@@ -509,7 +511,9 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
     },
     async getEntry(id) {
       const result = await db.query<Row>(
-        `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at, created_at, updated_at
+        `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                mint, vault_address, deposit_receipt, created_at, updated_at
          FROM contest_entries WHERE id = $1`,
         [id],
       );
