@@ -46,6 +46,39 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function getClusterClock(conn: Connection): Promise<number> {
+  const clockInfo = await conn.getAccountInfo(new PublicKey("SysvarC1ock11111111111111111111111111111111"));
+  if (!clockInfo) throw new Error("clock sysvar missing");
+  return Number(new DataView(clockInfo.data.buffer, clockInfo.data.byteOffset, clockInfo.data.byteLength).getBigInt64(32, true));
+}
+
+async function waitUntilCluster(conn: Connection, targetUnix: number, label: string) {
+  for (;;) {
+    const now = await getClusterClock(conn);
+    const remain = targetUnix - now;
+    console.log(label, "cluster_clock", now, "target", targetUnix, "remain_sec", remain);
+    if (remain <= 0) return now;
+    await sleep(Math.min(Math.max(remain, 1) * 1000, 15_000));
+  }
+}
+
+async function fetchFinalized(conn: Connection, signature: string) {
+  for (let i = 0; i < 90; i++) {
+    const tx = await conn.getTransaction(signature, {
+      commitment: "finalized",
+      maxSupportedTransactionVersion: 0,
+    });
+    if (tx) {
+      if (tx.meta == null || tx.meta.err !== null) {
+        throw new Error(`finalized tx err ${signature}: ${JSON.stringify(tx.meta?.err ?? "missing meta")}`);
+      }
+      return tx;
+    }
+    await sleep(2000);
+  }
+  throw new Error(`not finalized ${signature}`);
+}
+
 async function sendTx(conn: Connection, tx: Transaction, signers: Keypair[]): Promise<string> {
   const latest = await conn.getLatestBlockhash("confirmed");
   tx.feePayer = signers[0]!.publicKey;
@@ -164,6 +197,9 @@ async function main() {
     throw new Error(`no joinable contest (status=${contest.status} filled=${contest.filledCount})`);
   }
   console.log("using_contest", contest.id, contest.status, contest.filledCount);
+
+  const DEAD = "03818b63-c516-4f55-8343-c5ae4ade17cf";
+  if (contest.id === DEAD) throw new Error("refusing dead contest 03818b63; need a fresh UUID");
 
   const mint = config.server.solana.usdcMint || MINT;
   const programId = new PublicKey(config.server.solana.escrowProgramId || PROGRAM_ID);
@@ -287,8 +323,10 @@ async function main() {
       const phantomAta = getAssociatedTokenAddressSync(new PublicKey(MINT), phantomPk);
       const mintPk = new PublicKey(MINT);
 
-      // Long lock window so deposits finish before lock time (RPC rate limits).
-      const lockAt = Math.floor(Date.now() / 1000) + 180;
+      // Lock window from cluster Clock sysvar (not host). Large margin for 429/RPC delays.
+      const clusterNow = await getClusterClock(conn);
+      const lockAt = clusterNow + 600;
+      console.log("cluster_clock", clusterNow, "lock_at", lockAt, "host", Math.floor(Date.now() / 1000));
       {
         const data = new Uint8Array(8 + 16 + 8 + 4 + 8);
         data.set(anchorDiscriminator("initialize_contest"), 0);
@@ -379,6 +417,8 @@ async function main() {
       );
 
       async function deposit(user: Keypair, ata: PublicKey) {
+        const clk = await getClusterClock(conn);
+        if (clk >= lockAt) throw new Error(`cluster clock ${clk} already past lock_at ${lockAt}; aborting deposit`);
         const receipt = deriveDepositReceipt(programId, contestPda, user.publicKey);
         const data = new Uint8Array(8 + 8 + 32 + 16);
         data.set(anchorDiscriminator("deposit"), 0);
@@ -410,9 +450,8 @@ async function main() {
       await sleep(4000);
       console.log("deposit_bob", await deposit(bob, bobAta));
 
-      const waitMs = Math.max(0, lockAt * 1000 - Date.now()) + 5000;
-      console.log("waiting_lock_ms", waitMs);
-      await sleep(waitMs);
+      // Re-check cluster clock before each deposit is already done; wait on cluster for lock.
+      await waitUntilCluster(conn, lockAt, "waiting_lock");
       console.log(
         "lock",
         await sendTx(
@@ -449,12 +488,14 @@ async function main() {
         [payer],
       );
       console.log("commit_settlement", settlementSignature);
-      vaultAfter = Number((await getAccount(conn, vault)).amount);
-
-      const slot = await conn.getSlot("confirmed");
       const nowIso = new Date().toISOString();
       await settlements.markSubmitted(prepared.id, settlementSignature, nowIso);
-      await settlements.markConfirmed(prepared.id, slot, nowIso);
+      const finalized = await fetchFinalized(conn, settlementSignature);
+      if (finalized.meta?.err !== null) {
+        throw new Error(`refusing confirm; finalized err ${JSON.stringify(finalized.meta?.err)}`);
+      }
+      await settlements.markConfirmed(prepared.id, finalized.slot, new Date().toISOString());
+      vaultAfter = Number((await getAccount(conn, vault)).amount);
       explorer = {
         commit: `https://explorer.solana.com/tx/${settlementSignature}?cluster=devnet`,
         contest: `https://explorer.solana.com/address/${contestPda.toBase58()}?cluster=devnet`,

@@ -37,6 +37,22 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function getClusterClock(conn: Connection): Promise<number> {
+  const clockInfo = await conn.getAccountInfo(new PublicKey("SysvarC1ock11111111111111111111111111111111"));
+  if (!clockInfo) throw new Error("clock sysvar missing");
+  return Number(new DataView(clockInfo.data.buffer, clockInfo.data.byteOffset, clockInfo.data.byteLength).getBigInt64(32, true));
+}
+
+async function waitUntilCluster(conn: Connection, targetUnix: number, label: string) {
+  for (;;) {
+    const now = await getClusterClock(conn);
+    const remain = targetUnix - now;
+    console.log(label, "cluster_clock", now, "target", targetUnix, "remain_sec", remain);
+    if (remain <= 0) return now;
+    await sleep(Math.min(Math.max(remain, 1) * 1000, 15_000));
+  }
+}
+
 async function fetchFinalized(conn: Connection, signature: string) {
   for (let i = 0; i < 90; i++) {
     const tx = await conn.getTransaction(signature, {
@@ -128,7 +144,9 @@ async function main() {
   // Skip init if contest PDA already exists
   const existing = await conn.getAccountInfo(contestPda);
   if (!existing) {
-    const lockAt = Math.floor(Date.now() / 1000) + 50;
+    const clusterNow = await getClusterClock(conn);
+    const lockAt = clusterNow + 600;
+    console.log("cluster_clock", clusterNow, "lock_at", lockAt, "host", Math.floor(Date.now() / 1000));
     const data = new Uint8Array(8 + 16 + 8 + 4 + 8);
     data.set(anchorDiscriminator("initialize_contest"), 0);
     data.set(contestIdBytes, 8);
@@ -217,6 +235,8 @@ async function main() {
     );
 
     async function deposit(user: Keypair, ata: PublicKey) {
+      const clk = await getClusterClock(conn);
+      if (clk >= lockAt) throw new Error(`cluster clock ${clk} already past lock_at ${lockAt}; aborting deposit`);
       const receipt = deriveDepositReceipt(programId, contestPda, user.publicKey);
       const data = new Uint8Array(8 + 8 + 32 + 16);
       data.set(anchorDiscriminator("deposit"), 0);
@@ -248,9 +268,7 @@ async function main() {
     await sleep(3000);
     console.log("deposit_bob", await deposit(bob, bobAta));
 
-    const waitMs = Math.max(0, lockAt * 1000 - Date.now()) + 5000;
-    console.log("waiting_lock_ms", waitMs);
-    await sleep(waitMs);
+    await waitUntilCluster(conn, lockAt, "waiting_lock");
     console.log(
       "lock",
       await sendTx(
