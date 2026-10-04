@@ -492,6 +492,19 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
       );
       return result.rows.map(contestFrom);
     },
+    async listWithConfirmedEntry(matchId, wallet) {
+      const result = await db.query<Row>(
+        `SELECT ${CONTEST_COLUMNS} FROM contests
+         WHERE match_id = $1
+           AND id IN (
+             SELECT contest_id FROM contest_entries
+             WHERE wallet = $2 AND status = 'CONFIRMED'
+           )
+         ORDER BY contest_type, entry_fee_base_units, created_at`,
+        [matchId, wallet],
+      );
+      return result.rows.map(contestFrom);
+    },
     async listByMatch(matchId) {
       const result = await db.query<Row>(
         `SELECT ${CONTEST_COLUMNS} FROM contests WHERE match_id = $1 ORDER BY created_at`,

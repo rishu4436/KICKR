@@ -23,8 +23,12 @@ export function registerContestRoutes(
   authorize: (c: Context<AppEnv>, permission: Permission) => Promise<void>,
 ): void {
   app.get("/matches/:id/contests", async (c) => {
-    await authenticate(c);
-    const contests = await deps.contests.listDiscoverable(c.req.param("id"), context(deps, c));
+    const principal = await authenticate(c);
+    const contests = await deps.contests.listMatchContests(
+      c.req.param("id"),
+      principal.walletAddress,
+      context(deps, c),
+    );
     return c.json({ contests });
   });
 

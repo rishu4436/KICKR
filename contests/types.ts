@@ -165,6 +165,13 @@ export interface ContestLimits {
   maxExposurePerMatch: number | null;
 }
 
+/** Join stays limited to rooms still taking seats. */
+const JOINABLE_CONTEST_STATUSES = new Set<string>(["OPEN", "PARTIALLY_FILLED"]);
+
+export function contestAcceptsNewEntry(status: string): boolean {
+  return JOINABLE_CONTEST_STATUSES.has(status);
+}
+
 export interface DiscoveryView {
   matchId: string;
   contestId: string;

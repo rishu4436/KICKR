@@ -229,6 +229,19 @@ export class InMemoryContestStore implements ContestStore {
     );
   }
 
+  async listWithConfirmedEntry(matchId: string, wallet: string): Promise<ContestRecord[]> {
+    return this.exclusive(() => {
+      const entered = new Set(
+        this.entries
+          .filter((entry) => entry.wallet === wallet && entry.status === "CONFIRMED")
+          .map((entry) => entry.contestId),
+      );
+      return this.contests
+        .filter((contest) => contest.matchId === matchId && entered.has(contest.id))
+        .map((contest) => clone(contest));
+    });
+  }
+
   async listByMatch(matchId: string): Promise<ContestRecord[]> {
     return this.exclusive(() =>
       this.contests.filter((contest) => contest.matchId === matchId).map((contest) => clone(contest)),

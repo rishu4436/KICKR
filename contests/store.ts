@@ -74,6 +74,8 @@ export interface ContestStore {
   reserveSeat(input: ReserveSeatInput): Promise<ReserveResult>;
   getContest(id: string): Promise<ContestRecord | null>;
   listDiscoverable(matchId: string): Promise<ContestRecord[]>;
+  /** Contests on this match where the wallet has a CONFIRMED entry, any contest status. */
+  listWithConfirmedEntry(matchId: string, wallet: string): Promise<ContestRecord[]>;
   listByMatch(matchId: string): Promise<ContestRecord[]>;
   listEntries(contestId: string): Promise<EntryRecord[]>;
   getEntry(id: string): Promise<EntryRecord | null>;

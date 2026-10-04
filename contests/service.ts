@@ -111,6 +111,22 @@ export class ContestService {
     return rows;
   }
 
+  /**
+   * Joinable discovery for every signed-in wallet, plus contests on this match
+   * where this wallet has a confirmed entry (FULL, LOCKED, or settled).
+   * Entered rows are read from the store, not the shared discovery cache, so
+   * another wallet does not see them and a stale open snapshot cannot hide them.
+   */
+  async listMatchContests(matchId: string, wallet: string, ctx: RequestContext): Promise<DiscoveryView[]> {
+    const open = await this.listDiscoverable(matchId, ctx);
+    const entered = (await this.store.listWithConfirmedEntry(matchId, wallet)).map(discoveryOf);
+    const enteredById = new Map(entered.map((row) => [row.contestId, row]));
+    const merged = open
+      .filter((row) => !enteredById.has(row.contestId))
+      .concat(entered);
+    return merged;
+  }
+
   async getContest(id: string): Promise<DiscoveryView> {
     const contest = await this.store.getContest(id);
     if (!contest) {

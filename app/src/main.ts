@@ -16,6 +16,7 @@ import {
 } from "./claim-flow.js";
 
 Object.assign(globalThis, { Buffer });
+import { contestAcceptsNewEntry } from "../../contests/types.js";
 import { calculateCreditsUsed, remainingCredits } from "../../domain/football/credits.js";
 import { formationLabel } from "../../domain/football/presentation.js";
 import { validateFantasyTeam } from "../../domain/football/validate-team.js";
@@ -321,7 +322,9 @@ async function renderContests(id: string): Promise<void> {
         <p class="quiet">Stages: MATCH FINAL → Result Processing → Results Verified → Prize Committed → Claim Available</p>
         <div class="my-result quiet">Loading your result…</div>
       </div>
-      <button class="primary" data-join="${contest.contestId}">Join</button>
+      ${contestAcceptsNewEntry(contest.status)
+        ? `<button class="primary" data-join="${contest.contestId}">Join</button>`
+        : `<p class="quiet">Closed to new entries</p>`}
     </article>`).join("");
   app.innerHTML = shell("Contests", `
     <div class="row"><a class="quiet" href="#/matches/${id}">Match</a><a class="quiet" href="#/">Matches</a></div>

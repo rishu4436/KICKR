@@ -6,6 +6,8 @@ import { InMemoryAuditStore } from "../audit/memory.js";
 import type { RedisClient } from "../redis/client.js";
 import { InMemoryRedis } from "../redis/client.js";
 import { DEV_TEMPLATES } from "../contests/dev-catalog.js";
+import { contestAcceptsNewEntry } from "../contests/types.js";
+import type { ContestRecord } from "../contests/types.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { LocalContestLockScheduler } from "../contests/lock-scheduler.js";
 import { InMemoryContestStore } from "../contests/memory-store.js";
@@ -353,6 +355,86 @@ describe("contest engine", () => {
   });
 });
 
+describe("entered contests stay visible after they close", () => {
+  it("lists a confirmed entrant's FULL, LOCKED, and settled contest without opening it to others", async () => {
+    const now = new Date("2026-10-03T12:00:00.000Z");
+    const ctx = { now, correlationId: "entrant-list" };
+    const { contests, football, store } = stack();
+    const contest = await contests.ensureOpenContest(LOCAL_DEV_MATCH_UPCOMING, H2H5, ctx);
+    const walletA = "A".repeat(32);
+    const walletB = "B".repeat(32);
+    const stranger = "S".repeat(32);
+    const teamA = await xi(football, crypto.randomUUID(), now);
+    const teamB = await xi(football, crypto.randomUUID(), now);
+    const late = await xi(football, crypto.randomUUID(), now);
+    const reservedA = await contests.reserve(contest.id, teamA.team.accountId, walletA, teamA.version.id, ctx);
+    await contests.reserve(contest.id, teamB.team.accountId, walletB, teamB.version.id, ctx);
+    await store.confirmVerifiedDeposit({
+      reservationId: reservedA.reservation.id,
+      signature: "sig".padEnd(88, "x"),
+      slot: 9,
+      blockTime: Math.floor(now.getTime() / 1000),
+      amountBaseUnits: 5_000_000,
+      mint: "mint",
+      vault: "vault",
+      depositReceipt: "receipt",
+      contestPda: "pda",
+      teamVersionId: teamA.version.id,
+      now,
+    });
+
+    const discoverable = await contests.listDiscoverable(LOCAL_DEV_MATCH_UPCOMING, ctx);
+    expect(discoverable.some((row) => row.contestId === contest.id)).toBe(false);
+    const forA = await contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, walletA, ctx);
+    const full = forA.find((row) => row.contestId === contest.id);
+    expect(full?.status).toBe("FULL");
+    expect(forA.filter((row) => row.contestId === contest.id)).toHaveLength(1);
+    const pendingOnly = await contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, walletB, ctx);
+    expect(pendingOnly.some((row) => row.contestId === contest.id)).toBe(false);
+
+    await football.applyMatchTransition(LOCAL_DEV_MATCH_UPCOMING, "LOCKED", ctx);
+    await contests.lockContestsForMatch(LOCAL_DEV_MATCH_UPCOMING, ctx);
+    const locked = (await contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, walletA, ctx)).find(
+      (row) => row.contestId === contest.id,
+    );
+    expect(locked?.status).toBe("LOCKED");
+    expect(contestAcceptsNewEntry(locked?.status ?? "")).toBe(false);
+
+    const hidden = (store as unknown as { contests: ContestRecord[] }).contests;
+    const row = hidden.find((item) => item.id === contest.id);
+    if (!row) {
+      throw new Error("missing contest");
+    }
+    row.status = "SETTLED";
+    const settled = (await contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, walletA, ctx)).find(
+      (item) => item.contestId === contest.id,
+    );
+    expect(settled?.status).toBe("SETTLED");
+    expect(contestAcceptsNewEntry("SETTLED")).toBe(false);
+    expect(contestAcceptsNewEntry("OPEN")).toBe(true);
+    expect(contestAcceptsNewEntry("PARTIALLY_FILLED")).toBe(true);
+    const others = await contests.listDiscoverable(LOCAL_DEV_MATCH_UPCOMING, ctx);
+    expect(others.some((item) => item.contestId === contest.id)).toBe(false);
+    const strangerView = await contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, stranger, ctx);
+    expect(strangerView.some((item) => item.contestId === contest.id)).toBe(false);
+    expect(strangerView.every((item) => contestAcceptsNewEntry(item.status))).toBe(true);
+    await expect(
+      contests.reserve(contest.id, late.team.accountId, stranger, late.version.id, ctx),
+    ).rejects.toMatchObject({ code: "CONTEST_NOT_JOINABLE" });
+  });
+
+  it("only renders Join when the contest still accepts entries", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "app/src/main.ts"), "utf8");
+    const start = source.indexOf("async function renderContests");
+    const end = source.indexOf("function joinPanel");
+    const render = source.slice(start, end);
+    expect(render).toContain("contestAcceptsNewEntry(contest.status)");
+    expect(render).toContain('data-join="${contest.contestId}"');
+    expect(render).toContain("Closed to new entries");
+    expect(render).toContain("hydrateContestSettlements");
+  });
+});
+
 describe("contest API", () => {
   it("quotes a pending seat and does not say the entry is confirmed", async () => {
     const now = new Date("2026-10-03T12:00:00.000Z");
@@ -400,5 +482,97 @@ describe("contest API", () => {
     expect(JSON.stringify(quote)).not.toMatch(/"CONFIRMED"|Joined/);
     const fetched = await built.app.request(`/reservations/${quote.reservation.id}`, { headers });
     expect(fetched.status).toBe(200);
+  });
+
+  it("returns a settled confirmed entry to its wallet only, with join still refused", async () => {
+    const now = new Date("2026-10-03T12:00:00.000Z");
+    const built = buildTestApp(() => now);
+    const ctx = { now, correlationId: "api-entrant" };
+    async function sessionFor(wallet = generateWallet()) {
+      const nonce = await built.app.request("/v1/auth/nonce", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ walletAddress: wallet.publicKey }),
+      });
+      const issued = (await nonce.json()) as { message: string };
+      const login = await built.app.request("/v1/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: wallet.publicKey,
+          message: issued.message,
+          signature: signMessage(issued.message, wallet.secretKey),
+        }),
+      });
+      const body = (await login.json()) as { token: string; account: { id: string } };
+      return { token: body.token, accountId: body.account.id, wallet: wallet.publicKey };
+    }
+    const owner = await sessionFor();
+    const other = await sessionFor();
+    const stranger = await sessionFor();
+    const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+    const listed = await built.app.request(`/matches/${LOCAL_DEV_MATCH_UPCOMING}/contests`, { headers: headers(owner.token) });
+    const openBody = (await listed.json()) as { contests: Array<{ contestId: string; templateCode: string; status: string }> };
+    const room = openBody.contests.find((row) => row.templateCode === "H2H-5");
+    if (!room) {
+      throw new Error("missing room");
+    }
+    const teamA = await xi(built.deps.football, owner.accountId, now);
+    const teamB = await xi(built.deps.football, other.accountId, now);
+    const teamC = await xi(built.deps.football, stranger.accountId, now);
+    const reserved = await built.app.request(`/contests/${room.contestId}/reservations`, {
+      method: "POST",
+      headers: headers(owner.token),
+      body: JSON.stringify({ teamVersionId: teamA.version.id }),
+    });
+    expect(reserved.status).toBe(201);
+    const quote = (await reserved.json()) as { reservation: { id: string } };
+    const otherReserve = await built.app.request(`/contests/${room.contestId}/reservations`, {
+      method: "POST",
+      headers: headers(other.token),
+      body: JSON.stringify({ teamVersionId: teamB.version.id }),
+    });
+    expect(otherReserve.status).toBe(201);
+    const store = (built.deps.contests as unknown as { store: InMemoryContestStore }).store;
+    await store.confirmVerifiedDeposit({
+      reservationId: quote.reservation.id,
+      signature: "sig".padEnd(88, "y"),
+      slot: 11,
+      blockTime: Math.floor(now.getTime() / 1000),
+      amountBaseUnits: 5_000_000,
+      mint: "mint",
+      vault: "vault",
+      depositReceipt: "receipt",
+      contestPda: "pda",
+      teamVersionId: teamA.version.id,
+      now,
+    });
+    await built.deps.football.applyMatchTransition(LOCAL_DEV_MATCH_UPCOMING, "LOCKED", ctx);
+    await built.deps.contests.lockContestsForMatch(LOCAL_DEV_MATCH_UPCOMING, ctx);
+    const hidden = (store as unknown as { contests: ContestRecord[] }).contests;
+    const stored = hidden.find((row) => row.id === room.contestId);
+    if (!stored) {
+      throw new Error("missing stored contest");
+    }
+    stored.status = "SETTLED";
+
+    const ownerList = await built.app.request(`/matches/${LOCAL_DEV_MATCH_UPCOMING}/contests`, { headers: headers(owner.token) });
+    expect(ownerList.status).toBe(200);
+    const ownerBody = (await ownerList.json()) as { contests: Array<{ contestId: string; status: string }> };
+    const mine = ownerBody.contests.filter((row) => row.contestId === room.contestId);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]?.status).toBe("SETTLED");
+    const otherList = await built.app.request(`/matches/${LOCAL_DEV_MATCH_UPCOMING}/contests`, { headers: headers(other.token) });
+    const otherBody = (await otherList.json()) as { contests: Array<{ contestId: string; status: string }> };
+    expect(otherBody.contests.some((row) => row.contestId === room.contestId)).toBe(false);
+    expect(otherBody.contests.every((row) => row.status === "OPEN" || row.status === "PARTIALLY_FILLED")).toBe(true);
+    const join = await built.app.request(`/contests/${room.contestId}/reservations`, {
+      method: "POST",
+      headers: headers(stranger.token),
+      body: JSON.stringify({ teamVersionId: teamC.version.id }),
+    });
+    expect(join.status).toBe(409);
+    const denied = (await join.json()) as { error: { code: string } };
+    expect(denied.error.code).toBe("CONTEST_NOT_JOINABLE");
   });
 });
