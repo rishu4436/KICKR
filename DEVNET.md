@@ -49,6 +49,18 @@ Explorer, after a real finalized signature exists:
 
 ## This machine
 
-Program id in source: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`. Not deployed.
+Program id in source: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`. Not deployed. A `getAccountInfo` on that address returned null, so there is no on-chain program account to query.
 
 A throwaway payer was created only in `/tmp` (not in git). `solana airdrop 2` against `https://api.devnet.solana.com` failed: `error sending request for url (https://api.devnet.solana.com/)`. No devnet transaction was signed or broadcast. There is no vault address, no deposit signature, and no explorer link. Local LiteSVM tests are the proof that ran. This is not a fake devnet signature.
+
+### Phase 4.1 retry (2026-10-04)
+
+Live devnet end-to-end is a manual release gate. `.github/workflows/ci.yml` runs lint, typecheck, test, and build only. It does not call a public RPC and must not.
+
+`https://api.devnet.solana.com` still fails from this host: DNS for that name is `198.18.0.1`, then TLS `unexpected eof while reading`. That is not a successful cluster query.
+
+A documented public Devnet RPC did answer: `https://solana-devnet.api.onfinality.io/public`. `getGenesisHash` was `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (Devnet, not mainnet). `getVersion` / `solana cluster-version` reported solana-core 4.3.0. `getLatestBlockhash` at commitment `finalized` succeeded (example context slot `507198756`) before the endpoint started returning HTTP-level rate limits. Ankr and Helius public hosts required an API key. `https://solana-devnet.public.blastapi.io` failed TLS the same way as the official host. No mainnet RPC was used.
+
+`solana airdrop 1` for the throwaway payer against the OnFinality Devnet URL failed: `airdrop request failed. This can happen when the rate limit is reached.` Balance stayed `0 SOL`. Deploy was not attempted. `requestAirdrop` JSON-RPC on that host returned `Invalid request` before the later rate limit. No deploy signature exists.
+
+`USDC_MINT` in `.env.example` is blank, and there is no `.env`. Phase 4.1 does not create a substitute mint. Initialize, contest create, reservation, deposit, and the indexer were not run. `docs/devnet-proof.md` is intentionally absent: there is no finalized signature to publish.
