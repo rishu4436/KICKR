@@ -229,6 +229,7 @@ describe("Phase 6 merkle + verify", () => {
       amountBaseUnits: 9_000_000,
       mint: "mint",
       vault: "vault",
+      claimPda: "ClaimPda11111111111111111111111111111111111",
       destination: "Claimant11111111111111111111111111111111111",
       vaultBalanceDecrease: 9_000_000,
     };
@@ -243,6 +244,7 @@ describe("Phase 6 merkle + verify", () => {
         expectedAmount: 9_000_000,
         expectedMint: "mint",
         expectedVault: "vault",
+        expectedClaimPda: observation.claimPda,
         existingSignature: null,
       }).ok,
     ).toBe(false);
@@ -257,6 +259,7 @@ describe("Phase 6 merkle + verify", () => {
         expectedAmount: 9_000_000,
         expectedMint: "mint",
         expectedVault: "vault",
+        expectedClaimPda: observation.claimPda,
         existingSignature: "other",
       }).ok,
     ).toBe(false);

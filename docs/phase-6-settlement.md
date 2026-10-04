@@ -141,7 +141,7 @@ Observed:
 - Contest PDA: `8Z2qH64FatTjNUczJXjH1vmQgBeWT9q9zP2Vjhp8bJ1X`
 - Vault: `8vUCRAgKgEWWoMvK1oZ3wx2imRPzwRDX7MgHWechWnKw`
 - Settlement PDA: `TyhQW8mnVSUvCvXWkexWJSXXME6Gr8XN1VcVpnhEazp`
-- result_hash (Devnet fixture): `1111111111111111111111111111111111111111111111111111111111111111`
+- result_hash (Devnet): `1111111111111111111111111111111111111111111111111111111111111111` — **historical protocol fixture** (Phase 6 wiring proof only; not a scoring-derived result; not Phase 6.1 primary proof)
 - merkle_root: `62aa2891b219e3841748e22a25daccabb8a4accecf00cc28bc9b61dcd9d25878`
 - Vault before claim: `10000000` base units; after claim: `1000000` (fee retained in vault; no admin withdraw)
 - Second claim for the same entry: **failed** (replay-safe)
@@ -191,7 +191,7 @@ Scores/ranks came from the real Phase 6.1 scoring fixture. On-chain entry fee wa
 | Contest PDA | `6JfYgriQ1YqNnUgMorqvVHYnEvfUcuwtPciYc9LLoF3a` |
 | Vault | `AkpoZHgDYLh1eJd772WhzYV2YMX16yrDDkepatggBRhb` |
 | Settlement PDA | `GaVWL5teJiKeZdupKDhmMxyzicYS7Bb5oRvLyjBFSMoM` |
-| result_hash | `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` |
+| result_hash | `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` — **fresh scoring-to-settlement Devnet proof** (Phase 6.1; not all-ones) |
 | merkle_root | `42371c23ee96d546796c78d6c174f00344f9924011b3716fdff2f736dc353a70` |
 | settlement_hash | `a5147cdd351d855dfd886a521a2b3ebcf82b6ea0b09260289956faca4f32d8b1` |
 | settlement tx (`commit_settlement`) | `SoCKK59GGxTpxVLAAwmuRs4CR9thKrPXYd4uvs8ZQaziVG2g34F4eTaaHrrn1noXViE8y4MtebJQnzC3uGDbLDt` |
@@ -209,3 +209,30 @@ Second claim: client/simulation blocked before a broadcast signature (`secondCla
 
 - `GET /contests/:contestId/my-result` — caller entry only (contest, entry, team version, XI, captain, vice, scores, rank, prize, settlement/claim status, tx signature when verified).
 - Claim flow uses authorized backend proof for the authenticated entry; amounts/proof come from immutable approved settlement. Claim UI states: idle / claimable / wallet_signing / submitted / confirming / confirmed / failed / already_claimed. Never “Paid” before independent verification; never `setClaimed(true)` on wallet submit.
+
+## Phase 6.1.1 Wallet claim integration
+
+Smallest production wallet path for **Claim Prize**: authorized `ClaimPlan` from the backend → browser wallet signs `claim_payout` → submit signature → independent reconcile of the finalized tx → `CLAIMED` / explorer link.
+
+### Rules preserved
+
+APPROVED snapshot only; `contest_entries.team_version_id`; captain 2× / vice 3/2 once; frozen policy; `entry_id_asc`; `sum(net)+fees==pot`; deterministic hash; merkle from approved settlement; program-controlled vault; no admin withdraw; `RUN_SETTLEMENT` granted to nobody; no backend hot wallet; no fake/test claim path; no `TEST_FIXTURE` settlement branch; no client-invented amount/entry/destination/version/root/proof/PDA/vault/mint.
+
+### Hash / proof classes
+
+| Class | Label |
+|---|---|
+| UNIT TEST | Vitest / LiteSVM / mock wallet adapter (labelled) |
+| LOCAL FIXTURE | In-memory Phase 6.1 / 6.1.1 harness through real scoring + API |
+| DEVNET SCRIPT | `scripts/phase6_1-devnet-e2e.ts` (payer key only in `/tmp`) |
+| DEVNET BROWSER E2E | Real Phantom/Solflare in a user browser — **not** a box-driven keypair |
+
+Phase 6 Devnet `1111…1111` remains a **historical protocol fixture**. Phase 6.1 Devnet result hash `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` is the **fresh scoring-to-settlement Devnet proof**.
+
+### Claim UI states
+
+`idle` → `claimable` → `wallet_signing` → `submitted` → `confirming` → `confirmed` (explorer link only from verified signature). Also: `failed`, `already_claimed`, `cluster_mismatch`. Submitted ≠ claimed. RPC timeout stays `confirming`, not `failed`. Wrong tx is a safe failure (not paid). Already claimed detected before second submit; program race → `already_claimed`.
+
+### Browser Devnet E2E status
+
+**NOT RUN** — no user Phantom/Solflare is connected in this agent box browser. The adapter (`app/src/claim-flow.ts` `readBrowserWallet`) is implemented and covered by UNIT TEST mock providers. Driving `/tmp/kickr-devnet-payer.json` as if it were a browser wallet is explicitly **not** a browser E2E. Phase 6.1.1 acceptance for browser claim remains open until a real connected wallet signs.

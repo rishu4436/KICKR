@@ -4,6 +4,8 @@ import type { Permission } from "../rbac/permissions.js";
 import { AppError } from "../shared/errors.js";
 import type { AppEnv, AppDeps } from "./server.js";
 import { decideClaim, decideSettlementCommit, type ClaimObservation, type SettlementCommitObservation } from "../settlement/verify.js";
+import { buildClaimPlan, type ClaimPlan } from "../solana/escrow.js";
+import { observeFinalizedClaim, RpcUnavailable } from "../solana/chain.js";
 
 /**
  * Settlement APIs. Never accept an arbitrary winner wallet + amount.
@@ -111,6 +113,9 @@ export function registerSettlementRoutes(
     if (proof.row.destinationWallet !== principal.walletAddress) {
       throw new AppError("FORBIDDEN", 403, "Claimant wallet does not match authenticated entry destination");
     }
+    if (proof.row.claimStatus === "CLAIMED") {
+      throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed — do not submit again");
+    }
     // Record submitted only — never claimed until reconcile verifies finalized chain tx.
     const row = await service.markClaimSubmitted(
       c.req.param("id"),
@@ -208,7 +213,7 @@ export function registerSettlementRoutes(
   });
 
   app.get("/entries/:id/claim", async (c) => {
-    await authenticate(c);
+    const principal = await authenticate(c);
     const service = requireSettlement(deps);
     const contestId = c.req.query("contestId");
     if (!contestId) {
@@ -218,17 +223,24 @@ export function registerSettlementRoutes(
     if (!settlement || settlement.status !== "SETTLEMENT_CONFIRMED") {
       throw new AppError("NOT_READY", 409, "Settlement is not confirmed on-chain");
     }
+    if (!settlement.merkleRoot) {
+      throw new AppError("NOT_PREPARED", 409, "Settlement merkle root missing");
+    }
     const proof = await service.claimProof(settlement.id, c.req.param("id"));
+    // Authenticated user may only receive their own claim material.
+    if (proof.row.destinationWallet !== principal.walletAddress) {
+      throw new AppError("FORBIDDEN", 403, "Claim material is only available for the authenticated entry destination");
+    }
+    if (proof.row.claimStatus === "CLAIMED") {
+      return c.json({
+        ...buildAuthorizedClaimPlan(deps, settlement, proof),
+        claimUiState: "already_claimed",
+        note: "Already claimed — do not submit again.",
+      });
+    }
     return c.json({
-      settlementVersion: settlement.settlementVersion,
-      resultHash: settlement.resultHash,
-      merkleRoot: settlement.merkleRoot,
-      entryId: proof.row.entryId,
-      amountBaseUnits: proof.row.netPayoutBaseUnits,
-      destinationWallet: proof.row.destinationWallet,
-      proof: proof.proof,
-      claimStatus: proof.row.claimStatus,
-      claimSignature: proof.row.claimSignature,
+      ...buildAuthorizedClaimPlan(deps, settlement, proof),
+      claimUiState: proof.row.claimStatus === "SUBMITTED" ? "confirming" : "claimable",
     });
   });
 
@@ -373,42 +385,130 @@ export function registerSettlementRoutes(
     const service = requireSettlement(deps);
     const body = (await c.req.json()) as {
       entryId: string;
-      observation: ClaimObservation;
-      expectedContestPda: string;
-      expectedMint: string;
-      expectedVault: string;
+      signature?: string;
+      observation?: ClaimObservation;
+      expectedContestPda?: string;
+      expectedMint?: string;
+      expectedVault?: string;
+      expectedClaimPda?: string;
     };
+    if (!body.entryId) {
+      throw new AppError("VALIDATION", 400, "entryId required");
+    }
     const proof = await service.claimProof(c.req.param("id"), body.entryId);
+    if (proof.row.destinationWallet !== principal.walletAddress) {
+      throw new AppError("FORBIDDEN", 403, "Only the authenticated claimant may reconcile their claim");
+    }
+    if (proof.row.claimStatus === "CLAIMED") {
+      return c.json({
+        entryId: proof.row.entryId,
+        claimStatus: proof.row.claimStatus,
+        claimUiState: "already_claimed",
+        claimSignature: proof.row.claimSignature,
+        explorerUrl: explorerUrl(proof.row.claimSignature, deps.config.public.solanaCluster),
+        idempotent: true,
+      });
+    }
+    const plan = buildAuthorizedClaimPlan(deps, proof.settlement, proof);
+    let observation = body.observation ?? null;
+    if (!observation) {
+      const signature = body.signature ?? proof.row.claimSignature;
+      if (!signature) {
+        throw new AppError("VALIDATION", 400, "signature or observation required");
+      }
+      try {
+        observation = await observeFinalizedClaim(
+          deps.config.secrets.solanaRpcUrl,
+          signature,
+          deps.config.server.solana.escrowProgramId,
+        );
+      } catch (error) {
+        if (error instanceof RpcUnavailable) {
+          // RPC timeout / unavailable: stay confirming — never mark FAILED.
+          return c.json({
+            entryId: proof.row.entryId,
+            claimStatus: proof.row.claimStatus,
+            claimUiState: "confirming",
+            claimSignature: signature,
+            explorerUrl: null,
+            note: "RPC unavailable — still confirming, not failed.",
+          }, 202);
+        }
+        throw error;
+      }
+      if (!observation) {
+        return c.json({
+          entryId: proof.row.entryId,
+          claimStatus: proof.row.claimStatus === "UNCLAIMED" ? "SUBMITTED" : proof.row.claimStatus,
+          claimUiState: "confirming",
+          claimSignature: signature,
+          explorerUrl: null,
+          note: "Not finalized yet — still confirming.",
+        }, 202);
+      }
+    }
     const decision = decideClaim({
-      observation: body.observation,
+      observation,
       programId: deps.config.server.solana.escrowProgramId,
       expectedClaimant: proof.row.destinationWallet,
-      expectedContestPda: body.expectedContestPda,
+      expectedContestPda: body.expectedContestPda ?? plan.contestPda,
       expectedVersion: proof.settlement.settlementVersion,
       expectedEntryId: body.entryId,
       expectedAmount: proof.row.netPayoutBaseUnits,
-      expectedMint: body.expectedMint,
-      expectedVault: body.expectedVault,
-      existingSignature: proof.row.claimSignature,
+      expectedMint: body.expectedMint ?? plan.mint,
+      expectedVault: body.expectedVault ?? plan.vault,
+      expectedClaimPda: body.expectedClaimPda ?? plan.claimPda,
+      existingSignature: null,
     });
     if (!decision.ok) {
+      // Wrong tx is a safe failure, not paid.
+      if (decision.reason === "DUPLICATE_CLAIM" || decision.reason === "TRANSACTION_FAILED") {
+        // Program race / already initialized claim PDA → ALREADY_CLAIMED when observation shows success elsewhere.
+        if (decision.reason === "DUPLICATE_CLAIM") {
+          const row = await service.markClaimed(
+            c.req.param("id"),
+            body.entryId,
+            proof.row.claimSignature ?? observation.signature,
+            deps.clock().toISOString(),
+          );
+          return c.json({
+            entryId: row.entryId,
+            claimStatus: row.claimStatus,
+            claimUiState: "already_claimed",
+            claimSignature: row.claimSignature,
+            explorerUrl: explorerUrl(row.claimSignature, deps.config.public.solanaCluster),
+          });
+        }
+      }
       throw new AppError("RECONCILE_REJECTED", 409, decision.reason);
+    }
+    if (decision.idempotent) {
+      return c.json({
+        entryId: proof.row.entryId,
+        claimStatus: proof.row.claimStatus,
+        claimUiState: "confirmed",
+        claimSignature: proof.row.claimSignature,
+        explorerUrl: explorerUrl(proof.row.claimSignature, deps.config.public.solanaCluster),
+        idempotent: true,
+      });
     }
     const row = await service.markClaimed(
       c.req.param("id"),
       body.entryId,
-      body.observation.signature,
+      observation.signature,
       deps.clock().toISOString(),
     );
     await appendAudit(deps, c, principal, "PAYOUT_CLAIMED", body.entryId, {
-      signature: body.observation.signature,
+      signature: observation.signature,
       amountBaseUnits: row.netPayoutBaseUnits,
       settlementId: c.req.param("id"),
       resultHash: proof.settlement.resultHash,
+      claimPda: plan.claimPda,
     });
     return c.json({
       entryId: row.entryId,
       claimStatus: row.claimStatus,
+      claimUiState: "confirmed",
       claimSignature: row.claimSignature,
       explorerUrl: explorerUrl(row.claimSignature, deps.config.public.solanaCluster),
     });
@@ -537,3 +637,51 @@ function settlementStages(status: string | null, claimStatus: string | null): st
   }
   return stages.slice(0, 1);
 }
+
+function buildAuthorizedClaimPlan(
+  deps: AppDeps,
+  settlement: {
+    id: string;
+    contestId: string;
+    settlementVersion: number;
+    resultHash: string;
+    merkleRoot: string | null;
+  },
+  proof: {
+    row: {
+      entryId: string;
+      netPayoutBaseUnits: number;
+      destinationWallet: string;
+      claimStatus: string;
+      claimSignature: string | null;
+    };
+    proof: string[];
+  },
+): ClaimPlan {
+  if (!settlement.merkleRoot) {
+    throw new AppError("NOT_PREPARED", 409, "Settlement merkle root missing");
+  }
+  if (!deps.config.server.solana.usdcMint) {
+    throw new AppError("NOT_CONFIGURED", 503, "USDC mint is not configured");
+  }
+  return buildClaimPlan({
+    config: {
+      programId: deps.config.server.solana.escrowProgramId,
+      usdcMint: deps.config.server.solana.usdcMint,
+      usdcDecimals: deps.config.server.solana.usdcDecimals,
+      cluster: deps.config.server.solana.cluster,
+    },
+    contestId: settlement.contestId,
+    settlementId: settlement.id,
+    settlementVersion: settlement.settlementVersion,
+    entryId: proof.row.entryId,
+    amountBaseUnits: proof.row.netPayoutBaseUnits,
+    destinationWallet: proof.row.destinationWallet,
+    merkleRoot: settlement.merkleRoot,
+    resultHash: settlement.resultHash,
+    proof: proof.proof,
+    claimStatus: proof.row.claimStatus,
+    claimSignature: proof.row.claimSignature,
+  });
+}
+

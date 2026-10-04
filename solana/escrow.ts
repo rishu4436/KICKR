@@ -296,3 +296,123 @@ export function buildClaimPayoutInstruction(input: {
     data: Buffer.from(data),
   });
 }
+
+
+export interface ClaimPlan {
+  cluster: string;
+  programId: string;
+  contestId: string;
+  settlementId: string;
+  settlementVersion: number;
+  entryId: string;
+  amountBaseUnits: number;
+  destinationWallet: string;
+  mint: string;
+  decimals: number;
+  tokenProgramId: string;
+  contestPda: string;
+  vault: string;
+  settlementPda: string;
+  claimPda: string;
+  claimantToken: string;
+  merkleRoot: string;
+  resultHash: string;
+  proof: string[];
+  claimStatus: string;
+  claimSignature: string | null;
+}
+
+/** Authorized claim material derived only from approved settlement + escrow config. Never trust client amounts. */
+export function buildClaimPlan(input: {
+  config: EscrowClientConfig;
+  contestId: string;
+  settlementId: string;
+  settlementVersion: number;
+  entryId: string;
+  amountBaseUnits: number;
+  destinationWallet: string;
+  merkleRoot: string;
+  resultHash: string;
+  proof: string[];
+  claimStatus: string;
+  claimSignature: string | null;
+}): ClaimPlan {
+  if (!input.config.usdcMint) {
+    throw new Error("USDC mint is not configured");
+  }
+  if (!Number.isInteger(input.amountBaseUnits) || input.amountBaseUnits <= 0) {
+    throw new Error("Claim amount must be a positive integer base units");
+  }
+  const programId = new PublicKey(input.config.programId);
+  const mint = new PublicKey(input.config.usdcMint);
+  const wallet = new PublicKey(input.destinationWallet);
+  const tokenProgramId = new PublicKey(input.config.tokenProgramId ?? TOKEN_PROGRAM_ID.toBase58());
+  const contestPda = deriveContestPda(programId, uuidToBytes(input.contestId));
+  const vault = deriveVaultAddress(mint, contestPda, tokenProgramId);
+  const settlementPda = deriveSettlementPda(programId, contestPda, input.settlementVersion);
+  const claimPda = deriveClaimPda(programId, contestPda, input.settlementVersion, uuidToBytes(input.entryId));
+  const claimantToken = getAssociatedTokenAddressSync(mint, wallet, false, tokenProgramId);
+  return {
+    cluster: input.config.cluster,
+    programId: programId.toBase58(),
+    contestId: input.contestId,
+    settlementId: input.settlementId,
+    settlementVersion: input.settlementVersion,
+    entryId: input.entryId,
+    amountBaseUnits: input.amountBaseUnits,
+    destinationWallet: wallet.toBase58(),
+    mint: mint.toBase58(),
+    decimals: input.config.usdcDecimals,
+    tokenProgramId: tokenProgramId.toBase58(),
+    contestPda: contestPda.toBase58(),
+    vault: vault.toBase58(),
+    settlementPda: settlementPda.toBase58(),
+    claimPda: claimPda.toBase58(),
+    claimantToken: claimantToken.toBase58(),
+    merkleRoot: input.merkleRoot,
+    resultHash: input.resultHash,
+    proof: [...input.proof],
+    claimStatus: input.claimStatus,
+    claimSignature: input.claimSignature,
+  };
+}
+
+export function buildClaimPayoutTransaction(input: {
+  plan: ClaimPlan;
+  feePayer: PublicKey;
+  recentBlockhash: string;
+}): Transaction {
+  if (input.feePayer.toBase58() !== input.plan.destinationWallet) {
+    throw new Error("Fee payer must equal authorized claimant destination");
+  }
+  const proof = input.plan.proof.map((hex) => {
+    const clean = hex.replace(/^0x/i, "");
+    if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+      throw new Error("Invalid merkle proof node");
+    }
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 32; i += 1) {
+      out[i] = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  });
+  const ix = buildClaimPayoutInstruction({
+    programId: input.plan.programId,
+    claimant: input.feePayer,
+    contestPda: new PublicKey(input.plan.contestPda),
+    settlementVersion: input.plan.settlementVersion,
+    entryId: input.plan.entryId,
+    amountBaseUnits: input.plan.amountBaseUnits,
+    proof,
+    mint: new PublicKey(input.plan.mint),
+    vault: new PublicKey(input.plan.vault),
+    claimantToken: new PublicKey(input.plan.claimantToken),
+    tokenProgramId: new PublicKey(input.plan.tokenProgramId),
+  });
+  const tx = new Transaction({
+    feePayer: input.feePayer,
+    recentBlockhash: input.recentBlockhash,
+  });
+  tx.add(ix);
+  return tx;
+}

@@ -4,6 +4,13 @@ import bs58 from "bs58";
 import { Connection, Keypair, type Transaction } from "@solana/web3.js";
 import { buildDepositTransaction, type DepositPlan } from "../../solana/escrow.js";
 import { assertDevCluster } from "../../solana/ids.js";
+import type { ClaimPlan } from "../../solana/escrow.js";
+import {
+  explorerClaimUrl,
+  publicRpcForCluster,
+  readBrowserWallet,
+  signAndSubmitClaim,
+} from "./claim-flow.js";
 
 Object.assign(globalThis, { Buffer });
 import { calculateCreditsUsed, remainingCredits } from "../../domain/football/credits.js";
@@ -819,23 +826,94 @@ async function hydrateContestSettlements(): Promise<void> {
 }
 
 async function startClaim(contestId: string, entryId: string, target: Element): Promise<void> {
-  target.innerHTML = `<p>wallet_signing… fetching authorized claim proof</p>`;
+  target.innerHTML = `<p>wallet_signing… fetching authorized claim plan</p>`;
   try {
-    const claim = await api<{
-      amountBaseUnits: number;
-      settlementVersion: number;
-      claimStatus: string;
-    }>(`/entries/${entryId}/claim?contestId=${contestId}`);
-    if (claim.claimStatus === "CLAIMED") {
+    await loadPublicEscrow();
+    const plan = await api<ClaimPlan & { claimUiState?: string; settlementId: string }>(
+      `/entries/${entryId}/claim?contestId=${contestId}`,
+    );
+    if (plan.claimStatus === "CLAIMED" || plan.claimUiState === "already_claimed") {
+      const url = explorerClaimUrl(plan.claimSignature, plan.cluster);
+      target.innerHTML = `<p>already_claimed${url ? ` · <a href="${url}" target="_blank" rel="noreferrer">View on Solana</a>` : ""}</p>`;
+      return;
+    }
+    const wallet = readBrowserWallet();
+    if (!wallet) {
+      target.innerHTML = `<p>failed</p><p class="quiet">No browser wallet connected (Phantom/Solflare). Claim requires your wallet to sign claim_payout — no private keys in the app.</p>`;
+      return;
+    }
+    if (plan.cluster !== state.publicCluster) {
+      target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">Plan cluster ${escapeText(plan.cluster)} ≠ app ${escapeText(state.publicCluster)}. Not signing.</p>`;
+      return;
+    }
+    target.innerHTML = `<p>wallet_signing… build claim_payout from authorized plan (amount ${plan.amountBaseUnits})</p>`;
+    const submitted = await signAndSubmitClaim({
+      plan,
+      wallet,
+      rpcUrl: publicRpcForCluster(plan.cluster),
+      appCluster: state.publicCluster,
+    });
+    if (submitted.uiState === "cluster_mismatch") {
+      target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">${escapeText(submitted.note)}</p>`;
+      return;
+    }
+    if (submitted.uiState === "already_claimed") {
       target.innerHTML = `<p>already_claimed</p>`;
       return;
     }
-    target.innerHTML = `<p>Claim proof ready for ${claim.amountBaseUnits} base units (settlement v${claim.settlementVersion}).
-      Sign claim_payout in your wallet, then submit the signature for reconciliation.
-      UI shows Prize claimed only after verified confirmation — never on click.</p>
-      <p class="quiet">States: idle → claimable → wallet_signing → submitted → confirming → confirmed</p>`;
+    if (!submitted.signature) {
+      target.innerHTML = `<p>failed</p><p class="quiet">${escapeText(submitted.note)}</p>`;
+      return;
+    }
+    // Submitted ≠ claimed
+    target.innerHTML = `<p>submitted — confirming…</p><p class="quiet">Signature recorded. Not paid until independent verification.</p>`;
+    await api(`/settlements/${plan.settlementId}/claim-submit`, {
+      method: "POST",
+      body: JSON.stringify({ entryId: plan.entryId, signature: submitted.signature }),
+    });
+    target.innerHTML = `<p>confirming…</p>`;
+    let confirmed = false;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const reconciled = await api<{
+        claimStatus: string;
+        claimUiState?: string;
+        claimSignature: string | null;
+        explorerUrl: string | null;
+        note?: string;
+      }>(`/settlements/${plan.settlementId}/reconcile-claim`, {
+        method: "POST",
+        body: JSON.stringify({ entryId: plan.entryId, signature: submitted.signature }),
+      });
+      if (reconciled.claimUiState === "confirmed" || reconciled.claimStatus === "CLAIMED") {
+        const url = reconciled.explorerUrl ?? explorerClaimUrl(reconciled.claimSignature, plan.cluster);
+        target.innerHTML = `<p><strong>Prize claimed</strong> · ${(plan.amountBaseUnits / 1_000_000).toFixed(2)} USDC · Transaction verified${
+          url ? ` · <a href="${url}" target="_blank" rel="noreferrer">View on Solana</a>` : ""
+        }</p>`;
+        confirmed = true;
+        break;
+      }
+      if (reconciled.claimUiState === "already_claimed") {
+        target.innerHTML = `<p>already_claimed</p>`;
+        confirmed = true;
+        break;
+      }
+      if (reconciled.claimUiState === "failed") {
+        target.innerHTML = `<p>failed</p><p class="quiet">Wrong or failed tx — not marked paid.</p>`;
+        confirmed = true;
+        break;
+      }
+      // RPC timeout / not finalized → stay confirming
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    if (!confirmed) {
+      target.innerHTML = `<p>confirming…</p><p class="quiet">Still waiting for finalized verification. Not failed. Not paid.</p>`;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "error";
-    target.innerHTML = `<p>Claim unavailable: ${message}</p>`;
+    if (/already.?claimed/i.test(message)) {
+      target.innerHTML = `<p>already_claimed</p>`;
+      return;
+    }
+    target.innerHTML = `<p>failed</p><p class="quiet">${escapeText(message)}</p>`;
   }
 }

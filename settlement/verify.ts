@@ -35,6 +35,7 @@ export interface ClaimObservation {
   amountBaseUnits: number;
   mint: string;
   vault: string;
+  claimPda: string;
   destination: string;
   vaultBalanceDecrease: number;
 }
@@ -87,6 +88,7 @@ export function decideClaim(input: {
   expectedAmount: number;
   expectedMint: string;
   expectedVault: string;
+  expectedClaimPda: string;
   existingSignature: string | null;
 }): VerifyDecision {
   const o = input.observation;
@@ -100,6 +102,7 @@ export function decideClaim(input: {
   if (o.amountBaseUnits !== input.expectedAmount) return { ok: false, reason: "WRONG_AMOUNT" };
   if (o.mint !== input.expectedMint) return { ok: false, reason: "WRONG_MINT" };
   if (o.vault !== input.expectedVault) return { ok: false, reason: "WRONG_VAULT" };
+  if (o.claimPda !== input.expectedClaimPda) return { ok: false, reason: "WRONG_CLAIM_PDA" };
   if (o.destination !== input.expectedClaimant) return { ok: false, reason: "ARBITRARY_DESTINATION" };
   if (o.vaultBalanceDecrease !== o.amountBaseUnits) return { ok: false, reason: "VAULT_DECREASE_MISMATCH" };
   if (input.existingSignature && input.existingSignature === o.signature) {
