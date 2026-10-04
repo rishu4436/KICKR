@@ -54,6 +54,20 @@ export const envSchema = z.object({
     (value) => (value === undefined || value === "" ? null : value),
     z.union([z.null(), z.coerce.number().int().positive()]),
   ),
+  RESERVATION_TTL_SECONDS: intOrDefault(600),
+  // Blank means unset. TODO: do not invent entry or exposure caps.
+  MAX_ENTRIES_PER_MATCH: z.preprocess(
+    (value) => (value === undefined || value === "" ? null : value),
+    z.union([z.null(), z.coerce.number().int().positive()]),
+  ),
+  MAX_ENTRIES_PER_CONTEST: z.preprocess(
+    (value) => (value === undefined || value === "" ? null : value),
+    z.union([z.null(), z.coerce.number().int().positive()]),
+  ),
+  MAX_EXPOSURE_PER_MATCH: z.preprocess(
+    (value) => (value === undefined || value === "" ? null : value),
+    z.union([z.null(), z.coerce.number().int().positive()]),
+  ),
 });
 
 export type ParsedEnv = z.infer<typeof envSchema>;

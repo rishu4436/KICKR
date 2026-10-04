@@ -104,3 +104,11 @@ Matches, squads, fantasy teams, and DEV_V1 scoring sit on the Phase 1 account, a
 Postgres remains authoritative for these new tables. Redis is still not authoritative for money or for XI history. The escrow program still does not exist. Squad credits are not USDC.
 
 USDC leaves a contest escrow only through a program instruction whose inputs were already written to the entry table and the approved snapshot. The backend decides the list. The program makes the list true. Support can show both records. Support cannot replace either one.
+
+## Phase 3 contest engine
+
+Templates, instances, atomic seats, and join quotes sit on the Phase 1 guard and the Phase 2 match and XI tables. See `CONTESTS.md`.
+
+Postgres is authoritative for contests, reservations, entries, and the contest outbox. Redis discovery is a cache. Phase 3 does not transfer USDC or confirm an entry. `ENTRY_CONFIRMED` is not emitted.
+
+The Phase 1 contest path remains legal. Phase 3 also allows `OPEN → PARTIALLY_FILLED → FULL → LOCKED → IN_PROGRESS → IN_REVIEW → READY_FOR_SETTLEMENT → SETTLED`, and `OPEN → LOCKED` when a match lock closes a joinable room. `REFUNDED` is still unreachable.

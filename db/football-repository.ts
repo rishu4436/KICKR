@@ -198,6 +198,41 @@ export function createPgFootballStore(db: Queryable): FootballStore {
         [team.id, team.status, team.updatedAt],
       );
     },
+    async getVersionById(id) {
+      const result = await db.query<Row>(
+        `SELECT v.id, v.team_id, v.version, v.match_id, v.player_ids, v.captain_id, v.vice_id,
+                v.credits_used, v.validation_result, v.created_at,
+                t.account_id, t.status AS team_status, t.created_at AS team_created_at, t.updated_at AS team_updated_at
+         FROM fantasy_team_versions v
+         JOIN fantasy_teams t ON t.id = v.team_id
+         WHERE v.id = $1`,
+        [id],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      const versions = await this.listVersions(asString(row.team_id));
+      const version = versions.find((item) => item.id === id);
+      if (!version) {
+        return null;
+      }
+      const status = asString(row.team_status);
+      if (status !== "DRAFT" && status !== "LOCKED") {
+        throw new Error("unknown team status");
+      }
+      return {
+        version,
+        team: {
+          id: asString(row.team_id),
+          accountId: asString(row.account_id),
+          matchId: asString(row.match_id),
+          status,
+          createdAt: asDate(row.team_created_at).toISOString(),
+          updatedAt: asDate(row.team_updated_at).toISOString(),
+        },
+      };
+    },
     async listVersions(teamId) {
       const result = await db.query<Row>(
         `SELECT id, team_id, version, match_id, player_ids, captain_id, vice_id,

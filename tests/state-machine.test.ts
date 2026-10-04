@@ -24,7 +24,9 @@ describe("state machine", () => {
   });
 
   it("rejects an illegal contest transition", () => {
-    expect(stateMachine.isTransitionLegal("CONTEST", "OPEN", "LOCKED")).toBe(false);
+    // Phase 3 match lock: a joinable OPEN contest may move to LOCKED.
+    // Skipping to SETTLED or any edge into REFUNDED stays illegal.
+    expect(stateMachine.isTransitionLegal("CONTEST", "OPEN", "LOCKED")).toBe(true);
     expect(() => stateMachine.transition("CONTEST", "OPEN", "SETTLED")).toThrow(IllegalTransitionError);
     expect(stateMachine.isTransitionLegal("CONTEST", "OPEN", "REFUNDED")).toBe(false);
     expect(stateMachine.isTransitionLegal("CONTEST", "SETTLED", "REFUNDED")).toBe(false);

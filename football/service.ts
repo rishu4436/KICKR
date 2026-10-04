@@ -167,6 +167,24 @@ export class FootballService {
     return { team, latest: versions.at(-1) ?? null };
   }
 
+  async getVersionById(versionId: string): Promise<{
+    team: FantasyTeamRecord;
+    version: FantasyTeamVersionRecord;
+  } | null> {
+    return this.store.getVersionById(versionId);
+  }
+
+  async getVersionForAccount(versionId: string, accountId: string): Promise<{
+    team: FantasyTeamRecord;
+    version: FantasyTeamVersionRecord;
+  } | null> {
+    const owned = await this.store.getVersionById(versionId);
+    if (!owned || owned.team.accountId !== accountId) {
+      return null;
+    }
+    return owned;
+  }
+
   async listVersions(teamId: string, accountId: string): Promise<FantasyTeamVersionRecord[] | null> {
     const owned = await this.getTeamForAccount(teamId, accountId);
     if (!owned) {

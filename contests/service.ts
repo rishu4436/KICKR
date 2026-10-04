@@ -1,0 +1,366 @@
+import type { AuditStore } from "../audit/types.js";
+import type { RequestContext } from "../auth/types.js";
+import type { FootballService } from "../football/service.js";
+import { AppError } from "../shared/errors.js";
+import type { ContestDiscoveryCache } from "./discovery.js";
+import type { ContestStore } from "./store.js";
+import type { ContestLimits, ContestRecord, DiscoveryView, EntryRecord, ReservationRecord } from "./types.js";
+import { assertBaseUnits } from "./types.js";
+
+export interface QuoteView {
+  contestId: string;
+  wallet: string;
+  teamVersionId: string;
+  entryAmountBaseUnits: number;
+  currency: "USDC";
+  escrow: ReservationRecord["escrowPlaceholder"];
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
+export interface ReservationView {
+  reservation: ReservationRecord;
+  entry: EntryRecord;
+  quote: QuoteView;
+  contest: DiscoveryView;
+  payment: "PAYMENT COMING IN PHASE 4";
+}
+
+const JOINABLE = new Set(["OPEN", "PARTIALLY_FILLED"]);
+
+function discoveryOf(contest: ContestRecord): DiscoveryView {
+  const estimatedPrizePoolBaseUnits = assertBaseUnits(
+    contest.filledCount * contest.entryFeeBaseUnits,
+    "estimated prize pool",
+  );
+  return {
+    matchId: contest.matchId,
+    contestId: contest.id,
+    templateId: contest.templateId,
+    templateCode: contest.rulesSnapshot.templateCode,
+    contestType: contest.contestType,
+    entryFeeBaseUnits: contest.entryFeeBaseUnits,
+    currency: "USDC",
+    capacity: contest.capacity,
+    filledCount: contest.filledCount,
+    remaining: contest.capacity - contest.filledCount,
+    status: contest.status,
+    lockTime: contest.rulesSnapshot.lockTime,
+    estimatedPrizePoolBaseUnits,
+    estimated: true,
+    funded: false,
+    estimateLabel: "filled entries times entry fee; not funded money",
+  };
+}
+
+function quoteOf(reservation: ReservationRecord): QuoteView {
+  return {
+    contestId: reservation.contestId,
+    wallet: reservation.wallet,
+    teamVersionId: reservation.teamVersionId,
+    entryAmountBaseUnits: reservation.amountBaseUnits,
+    currency: "USDC",
+    escrow: reservation.escrowPlaceholder,
+    nonce: reservation.nonce,
+    issuedAt: reservation.issuedAt,
+    expiresAt: reservation.expiresAt,
+  };
+}
+
+/**
+ * Contest engine. Join creates a PENDING reservation and a PENDING entry.
+ * It does not transfer USDC, set CONFIRMED, settle, or emit ENTRY_CONFIRMED.
+ */
+export class ContestService {
+  constructor(
+    private readonly store: ContestStore,
+    private readonly football: FootballService,
+    private readonly audit: AuditStore,
+    private readonly cache: ContestDiscoveryCache,
+    private readonly limits: ContestLimits & { reservationTtlSeconds: number },
+  ) {}
+
+  async listDiscoverable(matchId: string, ctx: RequestContext): Promise<DiscoveryView[]> {
+    const match = await this.football.getMatch(matchId);
+    if (!match) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    const created = await this.ensureEnabled(matchId, match.kickoffAt, ctx);
+    if (created) {
+      await this.cache.invalidateMatch(matchId);
+    }
+    const cached = await this.cache.readMatch(matchId);
+    if (cached) {
+      return cached;
+    }
+    const rows = (await this.store.listDiscoverable(matchId)).map(discoveryOf);
+    await this.cache.writeMatch(matchId, rows);
+    return rows;
+  }
+
+  async getContest(id: string): Promise<DiscoveryView> {
+    const contest = await this.store.getContest(id);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return discoveryOf(contest);
+  }
+
+  async reserve(
+    contestId: string,
+    accountId: string,
+    wallet: string,
+    teamVersionId: string,
+    ctx: RequestContext,
+  ): Promise<ReservationView> {
+    const owned = await this.football.getVersionForAccount(teamVersionId, accountId);
+    if (!owned) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (owned.team.status === "LOCKED") {
+      throw new AppError("TEAM_LOCKED", 409, "Locked team cannot be modified");
+    }
+    if (!owned.version.validationResult.valid) {
+      throw new AppError("FANTASY_TEAM_INVALID", 400, "Fantasy team is invalid");
+    }
+    const contest = await this.store.getContest(contestId);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (owned.version.matchId !== contest.matchId || owned.team.matchId !== contest.matchId) {
+      throw new AppError("TEAM_MATCH_MISMATCH", 409, "Team does not belong to this match");
+    }
+    if (!JOINABLE.has(contest.status)) {
+      if (contest.status === "FULL") {
+        throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
+      }
+      throw new AppError("CONTEST_NOT_JOINABLE", 409, "Contest is not open for reservations");
+    }
+
+    const result = await this.store.reserveSeat({
+      contestId,
+      wallet,
+      teamVersionId,
+      now: ctx.now,
+      ttlSeconds: this.limits.reservationTtlSeconds,
+      limits: this.limits,
+    });
+    if (result.entry.status !== "PENDING" || result.reservation.status !== "PENDING") {
+      throw new AppError("INTERNAL", 500, "Internal error", { expose: false });
+    }
+
+    await this.audit.append({
+      action: "JOIN_QUOTED",
+      occurredAt: ctx.now,
+      entityType: "RESERVATION",
+      entityId: result.reservation.id,
+      metadata: {
+        contestId,
+        teamVersionId,
+        amountBaseUnits: result.reservation.amountBaseUnits,
+        currency: "USDC",
+        payment: "not_attempted",
+      },
+      actorAccountId: accountId,
+      actorWallet: wallet,
+      correlationId: ctx.correlationId,
+    });
+    await this.audit.append({
+      action: "ENTRY_RESERVED",
+      occurredAt: ctx.now,
+      entityType: "ENTRY",
+      entityId: result.entry.id,
+      metadata: {
+        contestId,
+        reservationId: result.reservation.id,
+        seatNumber: result.entry.seatNumber,
+        status: "PENDING",
+        teamVersionId,
+      },
+      actorAccountId: accountId,
+      actorWallet: wallet,
+      correlationId: ctx.correlationId,
+    });
+    if (result.filled) {
+      await this.audit.append({
+        action: "CONTEST_FILLED",
+        occurredAt: ctx.now,
+        entityType: "CONTEST",
+        entityId: result.contest.id,
+        metadata: {
+          filledCount: result.contest.filledCount,
+          capacity: result.contest.capacity,
+          nextContestId: result.nextContest?.id ?? null,
+        },
+        actorAccountId: accountId,
+        actorWallet: wallet,
+        correlationId: ctx.correlationId,
+      });
+    }
+    if (result.nextContest) {
+      await this.audit.append({
+        action: "CONTEST_CREATED",
+        occurredAt: ctx.now,
+        entityType: "CONTEST",
+        entityId: result.nextContest.id,
+        metadata: {
+          matchId: result.nextContest.matchId,
+          templateId: result.nextContest.templateId,
+          templateVersion: result.nextContest.rulesSnapshot.templateVersion,
+          status: result.nextContest.status,
+          filledCount: 0,
+        },
+        actorAccountId: null,
+        actorWallet: null,
+        correlationId: ctx.correlationId,
+      });
+    }
+    await this.cache.invalidateMatch(contest.matchId);
+    const entry = await this.store.getEntry(result.entry.id);
+    if (!entry || entry.teamVersionId !== teamVersionId || entry.status !== "PENDING") {
+      throw new AppError("INTERNAL", 500, "Internal error", { expose: false });
+    }
+    return {
+      reservation: result.reservation,
+      entry,
+      quote: quoteOf(result.reservation),
+      contest: discoveryOf(result.contest),
+      payment: "PAYMENT COMING IN PHASE 4",
+    };
+  }
+
+  async getReservation(id: string, wallet: string, ctx: RequestContext): Promise<ReservationView> {
+    const reservation = await this.store.getReservation(id, ctx.now);
+    if (!reservation || reservation.wallet !== wallet) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    const entries = await this.store.listEntries(reservation.contestId);
+    const entry = entries.find((row) => row.reservationId === reservation.id);
+    const contest = await this.store.getContest(reservation.contestId);
+    if (!entry || !contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return {
+      reservation,
+      entry,
+      quote: quoteOf(reservation),
+      contest: discoveryOf(contest),
+      payment: "PAYMENT COMING IN PHASE 4",
+    };
+  }
+
+  /**
+   * Phase 3 cannot confirm a reservation. CONFIRMED is reserved for Phase 4
+   * after on-chain verification. This method never writes that status.
+   */
+  async rejectConfirmation(id: string, ctx: RequestContext): Promise<never> {
+    const reservation = await this.store.getReservation(id, ctx.now);
+    if (!reservation) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (reservation.status === "EXPIRED" || Date.parse(reservation.expiresAt) <= ctx.now.getTime()) {
+      throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+    }
+    throw new AppError("PHASE4_REQUIRED", 409, "Phase 3 cannot confirm a reservation or mark an entry paid");
+  }
+
+  async ensureOpenContest(matchId: string, templateId: string, ctx: RequestContext): Promise<ContestRecord> {
+    const match = await this.football.getMatch(matchId);
+    if (!match) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    const result = await this.store.ensureJoinable(matchId, templateId, match.kickoffAt, ctx.now);
+    if (result.created) {
+      await this.auditCreated(result.contest, ctx);
+      await this.cache.invalidateMatch(matchId);
+    }
+    return result.contest;
+  }
+
+  async updateTemplateFee(templateId: string, entryFeeBaseUnits: number, ctx: RequestContext) {
+    return this.store.updateTemplate(templateId, { entryFeeBaseUnits }, ctx.now);
+  }
+
+  /**
+   * Locks joinable contests for a match and freezes teams that already have a seat.
+   * Does not pay, refund, or settle. Server-side; not a frontend flag.
+   */
+  async lockContestsForMatch(matchId: string, ctx: RequestContext): Promise<ContestRecord[]> {
+    const locked = await this.store.lockJoinableForMatch(matchId, ctx.now);
+    for (const contest of locked) {
+      await this.audit.append({
+        action: "CONTEST_LOCKED",
+        occurredAt: ctx.now,
+        entityType: "CONTEST",
+        entityId: contest.id,
+        metadata: { matchId, status: contest.status, financial: false },
+        actorAccountId: null,
+        actorWallet: null,
+        correlationId: ctx.correlationId,
+      });
+      const entries = await this.store.listEntries(contest.id);
+      for (const entry of entries) {
+        const version = await this.football.getVersionById(entry.teamVersionId);
+        if (version && version.team.status === "DRAFT") {
+          await this.football.lockTeam(version.team.id, version.team.accountId, ctx);
+        }
+      }
+    }
+    await this.cache.invalidateMatch(matchId);
+    return locked;
+  }
+
+  /**
+   * In-process lock pass. A later distributed worker can call the same method.
+   * This is not a production scheduler and it does not start a process.
+   * TODO: whether kickoff alone, or only an explicit match LOCKED status, is the
+   * production rule is implemented as either. Match status itself is not changed here.
+   */
+  async lockDue(now: Date, ctx: RequestContext): Promise<string[]> {
+    const matches = await this.football.listMatches();
+    const ids: string[] = [];
+    for (const match of matches) {
+      const kickoffPassed = Date.parse(match.kickoffAt) <= now.getTime();
+      if (match.status !== "LOCKED" && !kickoffPassed) {
+        continue;
+      }
+      const locked = await this.lockContestsForMatch(match.id, { ...ctx, now });
+      ids.push(...locked.map((contest) => contest.id));
+    }
+    return ids;
+  }
+
+  private async ensureEnabled(matchId: string, lockTime: string, ctx: RequestContext): Promise<boolean> {
+    const templates = await this.store.listEnabledTemplates();
+    let created = false;
+    for (const template of templates) {
+      const result = await this.store.ensureJoinable(matchId, template.id, lockTime, ctx.now);
+      if (result.created) {
+        created = true;
+        await this.auditCreated(result.contest, ctx);
+      }
+    }
+    return created;
+  }
+
+  private async auditCreated(contest: ContestRecord, ctx: RequestContext): Promise<void> {
+    await this.audit.append({
+      action: "CONTEST_CREATED",
+      occurredAt: ctx.now,
+      entityType: "CONTEST",
+      entityId: contest.id,
+      metadata: {
+        matchId: contest.matchId,
+        templateId: contest.templateId,
+        templateVersion: contest.rulesSnapshot.templateVersion,
+        entryFeeBaseUnits: contest.entryFeeBaseUnits,
+        capacity: contest.capacity,
+        contestType: contest.contestType,
+      },
+      actorAccountId: null,
+      actorWallet: null,
+      correlationId: ctx.correlationId,
+    });
+  }
+}

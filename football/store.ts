@@ -100,6 +100,7 @@ export interface FootballStore {
   getTeam(id: string): Promise<FantasyTeamRecord | null>;
   saveTeam(team: FantasyTeamRecord): Promise<void>;
   listVersions(teamId: string): Promise<FantasyTeamVersionRecord[]>;
+  getVersionById(id: string): Promise<{ version: FantasyTeamVersionRecord; team: FantasyTeamRecord } | null>;
   insertVersion(version: FantasyTeamVersionRecord): Promise<void>;
   listEvents(matchId: string): Promise<StoredMatchEvent[]>;
   upsertCatalog(catalog: SportsCatalog): Promise<void>;
@@ -198,6 +199,18 @@ export class InMemoryFootballStore implements FootballStore {
       .slice()
       .sort((a, b) => a.version - b.version)
       .map((version) => clone(version));
+  }
+
+  async getVersionById(id: string): Promise<{ version: FantasyTeamVersionRecord; team: FantasyTeamRecord } | null> {
+    const version = this.versions.find((row) => row.id === id);
+    if (!version) {
+      return null;
+    }
+    const team = this.teams.get(version.teamId);
+    if (!team) {
+      return null;
+    }
+    return { version: clone(version), team: { ...team } };
   }
 
   async insertVersion(version: FantasyTeamVersionRecord): Promise<void> {

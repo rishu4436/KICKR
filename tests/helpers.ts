@@ -12,6 +12,9 @@ import { createApp, type AppDeps } from "../api/server.js";
 import { FootballService } from "../football/service.js";
 import { InMemoryFootballStore } from "../football/store.js";
 import { createLocalDevProvider } from "../sports/local-dev-provider.js";
+import { ContestDiscoveryCache } from "../contests/discovery.js";
+import { ContestService } from "../contests/service.js";
+import { InMemoryContestStore } from "../contests/memory-store.js";
 
 export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
   const pair = nacl.sign.keyPair();
@@ -49,6 +52,12 @@ export function testConfig(overrides?: {
       solana: { cluster: "devnet" },
       sportsData: { provider: "unset" },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },
+      contests: {
+        reservationTtlSeconds: 600,
+        maxEntriesPerMatch: null,
+        maxEntriesPerContest: null,
+        maxExposurePerMatch: null,
+      },
     },
     secrets: {
       databaseUrl: overrides?.databaseUrl ?? "postgres://kickr:supersecretpassword@localhost:5432/kickr",
@@ -79,13 +88,22 @@ export function buildTestApp(clock: Clock): {
     audit,
     config.server.fantasy,
   );
+  const redis = new InMemoryRedis();
+  const contests = new ContestService(
+    new InMemoryContestStore(),
+    football,
+    audit,
+    new ContestDiscoveryCache(redis, config.public.environment),
+    config.server.contests,
+  );
   const deps: AppDeps = {
     config,
     auth,
     grants,
     audit,
     football,
-    redis: new InMemoryRedis(),
+    contests,
+    redis,
     logger: silentLogger(),
     clock,
   };

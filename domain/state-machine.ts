@@ -4,10 +4,18 @@ import { IllegalTransitionError } from "../shared/errors.js";
  * Reusable transition guard. There is no setStatus and no raw status setter.
  * Callers must use transition(), which throws on an illegal edge.
  *
- * Contest lifecycle states are defined. Only the sequential path below is legal.
+ * Contest lifecycle states are defined. The Phase 1 path remains legal.
+ * Phase 3 adds the instance path OPEN → PARTIALLY_FILLED → FULL → LOCKED →
+ * IN_PROGRESS → IN_REVIEW → READY_FOR_SETTLEMENT → SETTLED, plus OPEN → LOCKED
+ * so a match lock can close an empty joinable room. PENDING and CONFIRMED stay
+ * on the Phase 1 path only. Phase 3 instances do not use them, and they do not
+ * mean a seat was paid.
  * TODO: REFUNDED from-states are unspecified. REFUNDED is a known state and is
  *       not reachable. It is not allowed from every state, and it is not allowed
- *       from any state until product defines the edges.
+ *       from any state until product defines the edges. Phase 3 does not move
+ *       a contest to REFUNDED or VOID, and neither edge would move USDC.
+ * VOID inbound edges exist only as exceptional, non-financial closures. Phase 3
+ * does not call them.
  * TODO: Whether any contest edge may be reversed (for example IN_REVIEW back to
  *       LOCKED) is unspecified. No reverse edges are legal.
  * TODO: ACCOUNT states and transitions are unspecified.
@@ -17,8 +25,10 @@ import { IllegalTransitionError } from "../shared/errors.js";
  * MATCH states and edges are defined below. TODO: whether POSTPONED can resume,
  * whether extra time exists, and whether HALFTIME may go straight to FULL_TIME,
  * are unspecified beyond the explicit edges. Contest REFUNDED is unchanged.
- * TODO: ENTRY states and transitions are unspecified. INDEXER_CONFIRM_ENTRY is
- *       not a status write on this machine.
+ * ENTRY states are PENDING, CONFIRMED, REFUNDED, CANCELLED. The only legal
+ * edge in Phase 3 is PENDING → CANCELLED. PENDING → CONFIRMED is intentionally
+ * absent: Phase 4 may add it only after on-chain verification. INDEXER_CONFIRM_ENTRY
+ * is not a status write on this machine. Phase 3 join does not confirm an entry.
  * TODO: REVIEW states and transitions are unspecified.
  * TODO: SETTLEMENT states and transitions are unspecified.
  */
@@ -37,18 +47,27 @@ export type EntityName = (typeof ENTITIES)[number];
 
 export const CONTEST_STATES = [
   "OPEN",
+  "PARTIALLY_FILLED",
+  "FULL",
   "PENDING",
   "CONFIRMED",
   "LOCKED",
+  "IN_PROGRESS",
   "IN_REVIEW",
   "READY_FOR_SETTLEMENT",
   "SETTLED",
   "REFUNDED",
+  "VOID",
 ] as const;
 
 export type ContestState = (typeof CONTEST_STATES)[number];
 
-/** The only legal contest edges in Phase 1. */
+/**
+ * Phase 1 path plus Phase 3 instance edges.
+ * OPEN → LOCKED is the match-lock edge for a still-joinable room.
+ * REFUNDED has no inbound edge. VOID edges are exceptional and not financial;
+ * Phase 3 does not transition to VOID or REFUNDED.
+ */
 export const CONTEST_TRANSITIONS: ReadonlyArray<readonly [ContestState, ContestState]> = [
   ["OPEN", "PENDING"],
   ["PENDING", "CONFIRMED"],
@@ -56,6 +75,16 @@ export const CONTEST_TRANSITIONS: ReadonlyArray<readonly [ContestState, ContestS
   ["LOCKED", "IN_REVIEW"],
   ["IN_REVIEW", "READY_FOR_SETTLEMENT"],
   ["READY_FOR_SETTLEMENT", "SETTLED"],
+  ["OPEN", "PARTIALLY_FILLED"],
+  ["PARTIALLY_FILLED", "FULL"],
+  ["PARTIALLY_FILLED", "LOCKED"],
+  ["FULL", "LOCKED"],
+  ["OPEN", "LOCKED"],
+  ["LOCKED", "IN_PROGRESS"],
+  ["IN_PROGRESS", "IN_REVIEW"],
+  ["OPEN", "VOID"],
+  ["PARTIALLY_FILLED", "VOID"],
+  ["FULL", "VOID"],
 ];
 
 export const TEAM_STATES = ["DRAFT", "LOCKED"] as const;
@@ -101,12 +130,24 @@ export const MATCH_TRANSITIONS: ReadonlyArray<readonly [MatchState, MatchState]>
   ["DATA_FINALIZING", "VOID"],
 ];
 
+
+export const ENTRY_STATES = ["PENDING", "CONFIRMED", "REFUNDED", "CANCELLED"] as const;
+export type EntryState = (typeof ENTRY_STATES)[number];
+
+/**
+ * Phase 3 does not confirm an entry. PENDING → CONFIRMED is not legal until
+ * Phase 4 adds it after on-chain verification. REFUNDED stays unreachable.
+ */
+export const ENTRY_TRANSITIONS: ReadonlyArray<readonly [EntryState, EntryState]> = [
+  ["PENDING", "CANCELLED"],
+];
+
 const TRANSITIONS: Record<EntityName, ReadonlyArray<readonly [string, string]>> = {
   ACCOUNT: [],
   TEAM: TEAM_TRANSITIONS,
   CONTEST: CONTEST_TRANSITIONS,
   MATCH: MATCH_TRANSITIONS,
-  ENTRY: [],
+  ENTRY: ENTRY_TRANSITIONS,
   REVIEW: [],
   SETTLEMENT: [],
 };

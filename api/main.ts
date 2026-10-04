@@ -4,7 +4,10 @@ import { loadConfig } from "../config/load.js";
 import { createPgAuditStore, createPgAccountRepository, createPgGrantRepository, createPgNonceRepository, createPgSessionRepository } from "../db/repositories.js";
 import { asQueryable, createPool } from "../db/pool.js";
 import { createPgFootballStore } from "../db/football-repository.js";
+import { createPgContestStore } from "../db/contest-repository.js";
 import { FootballService } from "../football/service.js";
+import { ContestDiscoveryCache } from "../contests/discovery.js";
+import { ContestService } from "../contests/service.js";
 import { createSportsProvider } from "../sports/local-dev-provider.js";
 import path from "node:path";
 import { createIoredisClient } from "../redis/ioredis-client.js";
@@ -46,6 +49,13 @@ if (sports?.developmentOnly) {
   await footballStore.upsertCatalog(sports.catalog());
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
+const contests = new ContestService(
+  createPgContestStore(pool),
+  football,
+  createPgAuditStore(db),
+  new ContestDiscoveryCache(redis, config.public.environment),
+  config.server.contests,
+);
 
 const app = createApp({
   config,
@@ -53,6 +63,7 @@ const app = createApp({
   grants: createPgGrantRepository(db),
   audit: createPgAuditStore(db),
   football,
+  contests,
   clientDir: path.resolve(process.cwd(), "dist/client"),
   redis,
   logger,

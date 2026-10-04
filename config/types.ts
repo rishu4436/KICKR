@@ -53,6 +53,15 @@ export interface ServerConfig {
     /** null: numeric max is not configured. TODO. */
     maxPlayersFromOneTeam: number | null;
   };
+  contests: {
+    reservationTtlSeconds: number;
+    /** null: do not impose a per-match entry cap. TODO. */
+    maxEntriesPerMatch: number | null;
+    /** null: do not impose an extra per-contest cap. Duplicate wallet is still forbidden. TODO. */
+    maxEntriesPerContest: number | null;
+    /** null: do not impose a USDC exposure cap. Integer base units when set. TODO. */
+    maxExposurePerMatch: number | null;
+  };
 }
 
 export interface SecretConfig {

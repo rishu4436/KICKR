@@ -51,6 +51,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
         creditCap: data.FANTASY_CREDIT_CAP,
         maxPlayersFromOneTeam: data.FANTASY_MAX_PLAYERS_FROM_ONE_TEAM,
       },
+      contests: {
+        reservationTtlSeconds: data.RESERVATION_TTL_SECONDS,
+        maxEntriesPerMatch: data.MAX_ENTRIES_PER_MATCH,
+        maxEntriesPerContest: data.MAX_ENTRIES_PER_CONTEST,
+        maxExposurePerMatch: data.MAX_EXPOSURE_PER_MATCH,
+      },
     },
     secrets: {
       databaseUrl: data.DATABASE_URL,

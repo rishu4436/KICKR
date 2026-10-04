@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUDIT_EVENTS } from "../audit/events.js";
@@ -54,8 +54,13 @@ describe("audit log", () => {
     expect(sql).toContain("BEFORE DELETE ON audit_events");
     expect(sql).toContain("REVOKE UPDATE, DELETE ON audit_events FROM PUBLIC");
     expect(sql).not.toMatch(/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION[^\n]*update_audit/i);
+    const allMigrations = readdirSync(path.resolve(process.cwd(), "migrations"))
+      .filter((name) => name.endsWith(".sql"))
+      .sort()
+      .map((name) => readFileSync(path.resolve(process.cwd(), "migrations", name), "utf8"))
+      .join("\n");
     for (const name of AUDIT_EVENTS) {
-      expect(sql).toContain(`'${name}'`);
+      expect(allMigrations).toContain(`'${name}'`);
     }
   });
 

@@ -31,3 +31,24 @@ export function asMigrationRunner(pool: pg.Pool): MigrationRunner {
     },
   };
 }
+
+export async function withTransaction<T>(pool: pg.Pool, fn: (db: Queryable) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const db: Queryable = {
+      async query<R = Record<string, unknown>>(sql: string, params?: readonly unknown[]) {
+        const result = await client.query(sql, params ? [...params] : undefined);
+        return { rows: result.rows as R[], rowCount: result.rowCount };
+      },
+    };
+    const value = await fn(db);
+    await client.query("COMMIT");
+    return value;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}

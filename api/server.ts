@@ -16,6 +16,8 @@ import type { RateLimiter } from "../shared/rate-limit.js";
 import type { Clock } from "../shared/clock.js";
 import { loginRequestSchema, nonceRequestSchema } from "./schemas.js";
 import { registerFootballRoutes } from "./football.js";
+import { registerContestRoutes } from "./contests.js";
+import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import { existsSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -33,6 +35,7 @@ export interface AppDeps {
   grants: GrantRepository;
   audit: AuditStore;
   football: FootballService;
+  contests: ContestService;
   redis: RedisClient;
   clientDir?: string;
   logger: Logger;
@@ -181,6 +184,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   registerFootballRoutes(app, deps, (c) => authenticate(deps, c));
+  registerContestRoutes(app, deps, (c) => authenticate(deps, c));
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));

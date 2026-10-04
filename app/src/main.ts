@@ -47,12 +47,18 @@ const state: {
   creditCap: number;
   maxPlayersFromOneTeam: number | null;
   draft: Draft;
+  teamVersionId: string | null;
+  teamMatchId: string | null;
+  joinNote: string;
 } = {
   token: sessionStorage.getItem("kickr.dev.token"),
   bucket: "upcoming",
   creditCap: 100,
   maxPlayersFromOneTeam: null,
   draft: { playerIds: [], captainId: "", viceId: "", filter: "ALL", query: "" },
+  teamVersionId: sessionStorage.getItem("kickr.dev.teamVersion"),
+  teamMatchId: sessionStorage.getItem("kickr.dev.teamMatch"),
+  joinNote: "",
 };
 
 function route(): string {
@@ -118,6 +124,10 @@ async function render(): Promise<void> {
     await renderBuilder(hash.split("/")[2] ?? "");
     return;
   }
+  if (hash.startsWith("#/matches/") && hash.endsWith("/contests")) {
+    await renderContests(hash.split("/")[2] ?? "");
+    return;
+  }
   if (hash.startsWith("#/matches/")) {
     await renderDetail(hash.split("/")[2] ?? "");
     return;
@@ -135,6 +145,7 @@ async function renderList(): Promise<void> {
       <p class="quiet">${match.home.name} · ${match.away.name}<br>${kickoffLabel(match.kickoffAt)}</p>
       <div class="row">
         <span class="quiet">${match.canBuildXi ? "XI open" : "XI closed"}</span>
+        <button class="ghost" data-contests="${match.id}">Contests</button>
         <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "Live" : "Closed"}</button>
       </div>
     </article>`).join("");
@@ -150,11 +161,99 @@ async function renderList(): Promise<void> {
       void render();
     });
   }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-contests]")) {
+    button.addEventListener("click", () => {
+      location.hash = `#/matches/${button.dataset.contests}/contests`;
+    });
+  }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-build]")) {
     button.addEventListener("click", () => {
       location.hash = `#/matches/${button.dataset.build}/xi`;
     });
   }
+}
+
+
+interface ContestCard {
+  contestId: string;
+  templateCode: string;
+  contestType: string;
+  entryFeeBaseUnits: number;
+  capacity: number;
+  filledCount: number;
+  remaining: number;
+  status: string;
+  lockTime: string;
+  estimatedPrizePoolBaseUnits: number;
+  estimated: true;
+  funded: false;
+  estimateLabel: string;
+}
+
+function formatUsdc(baseUnits: number): string {
+  const whole = Math.trunc(baseUnits / 1_000_000);
+  const fraction = Math.abs(baseUnits % 1_000_000);
+  if (fraction === 0) {
+    return String(whole);
+  }
+  const digits = String(fraction).padStart(6, "0").replace(/0+$/, "");
+  return `${whole}.${digits}`;
+}
+
+function contestTitle(card: ContestCard): string {
+  const dollars = formatUsdc(card.entryFeeBaseUnits);
+  if (card.contestType === "HEAD_TO_HEAD") {
+    return `H2H $${dollars}`;
+  }
+  if (card.contestType === "GRAND_LEAGUE") {
+    return `Grand League $${dollars}`;
+  }
+  return `WTA $${dollars}`;
+}
+
+async function renderContests(id: string): Promise<void> {
+  const data = await api<{ contests: ContestCard[] }>(`/matches/${id}/contests`);
+  const cards = data.contests.map((contest) => `<article class="card">
+      <div class="meta"><span>${contest.templateCode}</span><span>${contest.filledCount}/${contest.capacity}</span></div>
+      <h2>${contestTitle(contest)}</h2>
+      <p class="quiet">${formatUsdc(contest.entryFeeBaseUnits)} USDC entry · ${contest.remaining} seats left · ${contest.status.replaceAll("_", " ")}</p>
+      <p class="quiet">Estimated pool ${formatUsdc(contest.estimatedPrizePoolBaseUnits)} USDC. ${contest.estimateLabel}.</p>
+      <button class="primary" data-join="${contest.contestId}">Join</button>
+    </article>`).join("");
+  app.innerHTML = shell("Contests", `
+    <div class="row"><a class="quiet" href="#/matches/${id}">Match</a><a class="quiet" href="#/">Matches</a></div>
+    ${cards || `<p class="quiet">No open contests.</p>`}
+    <p class="note" id="join-note">${state.joinNote}</p>
+  `);
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-join]")) {
+    button.addEventListener("click", () => {
+      void joinContest(id, button.dataset.join ?? "");
+    });
+  }
+}
+
+async function joinContest(matchId: string, contestId: string): Promise<void> {
+  if (!state.teamVersionId || state.teamMatchId !== matchId) {
+    state.joinNote = "Save an XI for this match before reserving a seat.";
+    await renderContests(matchId);
+    return;
+  }
+  state.joinNote = "Creating entry";
+  await renderContests(matchId);
+  try {
+    const reserved = await api<{ payment: string; reservation: { status: string } }>(`/contests/${contestId}/reservations`, {
+      method: "POST",
+      body: JSON.stringify({ teamVersionId: state.teamVersionId }),
+    });
+    if (reserved.reservation.status !== "PENDING" || reserved.payment !== "PAYMENT COMING IN PHASE 4") {
+      state.joinNote = "Reservation failed";
+    } else {
+      state.joinNote = "Creating entry. Reservation created. Awaiting wallet payment. PAYMENT COMING IN PHASE 4";
+    }
+  } catch (error) {
+    state.joinNote = error instanceof Error ? error.message : "Reservation failed";
+  }
+  await renderContests(matchId);
 }
 
 async function renderDetail(id: string): Promise<void> {
@@ -164,10 +263,13 @@ async function renderDetail(id: string): Promise<void> {
     <p class="quiet">${match.competition} · ${kickoffLabel(match.kickoffAt)} · ${match.status.replaceAll("_", " ")}${match.venue ? ` · ${match.venue}` : ""}</p>
     <div class="row">
       <a class="quiet" href="#/">Matches</a>
+      <button class="ghost" id="contests">Contests</button>
       <button class="primary" id="build" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI closed"}</button>
     </div>
-    <p class="note">No contest entry on this screen.</p>
   `);
+  document.querySelector("#contests")?.addEventListener("click", () => {
+    location.hash = `#/matches/${id}/contests`;
+  });
   document.querySelector("#build")?.addEventListener("click", () => {
     if (match.canBuildXi) {
       location.hash = `#/matches/${id}/xi`;
@@ -296,7 +398,7 @@ async function saveTeam(matchId: string, players: PoolPlayer[], match: MatchCard
     method: "POST",
     body: JSON.stringify({ matchId }),
   });
-  const saved = await api<{ version: { version: number; playerIds: string[]; captainId: string; viceId: string } }>(
+  const saved = await api<{ version: { id: string; version: number; playerIds: string[]; captainId: string; viceId: string } }>(
     `/teams/${created.team.id}/versions`,
     {
       method: "POST",
@@ -307,6 +409,10 @@ async function saveTeam(matchId: string, players: PoolPlayer[], match: MatchCard
       }),
     },
   );
+  state.teamVersionId = saved.version.id;
+  state.teamMatchId = matchId;
+  sessionStorage.setItem("kickr.dev.teamVersion", saved.version.id);
+  sessionStorage.setItem("kickr.dev.teamMatch", matchId);
   state.draft.playerIds = saved.version.playerIds;
   state.draft.captainId = saved.version.captainId;
   state.draft.viceId = saved.version.viceId;

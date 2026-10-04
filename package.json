@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 2: football domain, XI builder, and a development scoring ruleset.",
+  "description": "KICKR Phase 3: contest templates, rooms, and join quotes before real money.",
   "type": "module",
   "engines": {
     "node": ">=20"
