@@ -15,6 +15,10 @@ import { createLocalDevProvider } from "../sports/local-dev-provider.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { InMemoryContestStore } from "../contests/memory-store.js";
+import { InMemorySettlementStore } from "../settlement/memory-store.js";
+import { SettlementService } from "../settlement/service.js";
+import { SettlementOrchestrator } from "../settlement/orchestrator.js";
+import { InMemorySnapshotStore } from "../live/snapshot.js";
 
 export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
   const pair = nacl.sign.keyPair();
@@ -106,13 +110,17 @@ export function buildTestApp(clock: Clock): {
     config.server.fantasy,
   );
   const redis = new InMemoryRedis();
+  const contestStore = new InMemoryContestStore();
   const contests = new ContestService(
-    new InMemoryContestStore(),
+    contestStore,
     football,
     audit,
     new ContestDiscoveryCache(redis, config.public.environment),
     config.server.contests,
   );
+  const snapshots = new InMemorySnapshotStore();
+  const settlement = new SettlementService(new InMemorySettlementStore());
+  const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
   const deps: AppDeps = {
     config,
     auth,
@@ -120,6 +128,9 @@ export function buildTestApp(clock: Clock): {
     audit,
     football,
     contests,
+    settlement,
+    settlementOrchestrator,
+    snapshots,
     redis,
     logger: silentLogger(),
     clock,

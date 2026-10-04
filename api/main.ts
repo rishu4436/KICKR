@@ -21,6 +21,10 @@ import { InMemoryRateLimiter } from "../shared/rate-limit.js";
 import { systemClock } from "../shared/clock.js";
 import { ConfigError } from "../shared/errors.js";
 import { createApp } from "./server.js";
+import { InMemorySettlementStore } from "../settlement/memory-store.js";
+import { SettlementService } from "../settlement/service.js";
+import { SettlementOrchestrator } from "../settlement/orchestrator.js";
+import { InMemorySnapshotStore } from "../live/snapshot.js";
 
 /**
  * API process entrypoint.
@@ -124,6 +128,9 @@ if (sportsRuntime.liveConfigured) {
   );
 }
 
+const snapshots = new InMemorySnapshotStore();
+const settlement = new SettlementService(new InMemorySettlementStore());
+const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
 const app = createApp({
   config,
   auth,
@@ -132,6 +139,9 @@ const app = createApp({
   football,
   contests,
   live,
+  settlement,
+  settlementOrchestrator,
+  snapshots,
   clientDir: path.resolve(process.cwd(), "dist/client"),
   redis,
   logger,

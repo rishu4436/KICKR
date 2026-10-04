@@ -259,6 +259,29 @@ export class SettlementService {
     return settlement;
   }
 
+  async markClaimSubmitted(settlementId: string, entryId: string, signature: string, nowIso: string): Promise<SettlementResultRow> {
+    const row = await this.store.getRowByEntry(settlementId, entryId);
+    if (!row) {
+      throw new AppError("ENTRY_NOT_FOUND", 404, "Settlement entry not found");
+    }
+    if (row.claimStatus === "CLAIMED") {
+      if (row.claimSignature === signature) {
+        return row;
+      }
+      throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed");
+    }
+    if (row.claimStatus === "SUBMITTED" && row.claimSignature === signature) {
+      return row;
+    }
+    // SUBMITTED ≠ CONFIRMED. Do not mark CLAIMED here.
+    row.claimStatus = "SUBMITTED";
+    row.claimSignature = signature;
+    row.claimedAt = null;
+    await this.store.updateRow(row);
+    void nowIso;
+    return row;
+  }
+
   async markClaimed(settlementId: string, entryId: string, signature: string, nowIso: string): Promise<SettlementResultRow> {
     const row = await this.store.getRowByEntry(settlementId, entryId);
     if (!row) {

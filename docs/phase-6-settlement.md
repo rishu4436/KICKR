@@ -152,3 +152,60 @@ RPC: `https://solana-devnet.api.onfinality.io/public` (official `api.devnet.sola
 
 - result_hash (test): `b587746ebac4f54c8e9ff7e8be36ebbbc25d153a817953c1ae77e0a02f979568`
 - settlement_hash (test): `8231e5acd41aa5cd54bbc939473eeeb2c5f29c943e952ec278cc5ef5e2a87d87`
+
+## Phase 6.1 End-to-End Proof
+
+Goal: football events → final scoring → APPROVED `match_score_snapshot` → contest ranking → payout → immutable manifest → merkle → Solana `commit_settlement` → user `claim_payout` → verified USDC.
+
+Program id: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`  
+`RUN_SETTLEMENT` remains granted to **nobody** (not Backend, not Support). Reviewer boundary unchanged. No second scoring engine. No `TEST_FIXTURE` settlement branch. No hardcoded Devnet winner/payout/result hash. All-ones `1111…1111` is **not** used as the Phase 6.1 primary proof (Phase 6 used it only as a labelled fixture).
+
+### Hash classes (do not conflate)
+
+| Class | Meaning |
+|---|---|
+| Unit-test hashes | Deterministic hashes inside `tests/settlement*.test.ts` / LiteSVM fixtures — **not** production results |
+| Local fixture hashes | In-memory Phase 6.1 harness (`tests/phase6_1_e2e.test.ts`, `scripts/phase6_1-devnet-e2e.ts` local stage) through real scoring → APPROVED snapshots → settlement — **not** on-chain |
+| Devnet hashes | On-chain commitment from the Phase 6.1 script after real deposits — primary Phase 6.1 chain proof |
+
+### Local fixture (application tests)
+
+Harness: 2 clubs, 22+ players, 1 match, XI + captain/vice, contest, confirmed entries, match events, APPROVED score snapshot, payout, merkle prepare. Winner emerges from scoring (not injected). Settlement uses `contest_entries.team_version_id` exactly. Captain/vice multipliers applied once in scoring. Tie-break remains `entry_id_asc`. Payouts from **frozen** contest `rulesSnapshot` (mutable template cannot alter settled payout). Unapproved/DRAFT snapshots refuse settlement prep.
+
+Example local fixture hashes from a successful harness run (labelled local, not Devnet):
+
+- local fixture result_hash: `4f69ed35e7ad5ecd855aef2fe70f9164f38cc86346430b38a70b6bfe5c4d314d`
+- local fixture merkle_root: `e6f2b06661d24e2b2d89b0e0bef7f6c2d8f6afaed7040695aa902097a2a67563`
+- local fixture settlement_hash: `64d79d8377464b153dfb3ce10334632675c8a58e29329efd4535a84d9ab23b7c`
+
+### Devnet demonstration (fresh, Phase 6.1)
+
+RPC: `https://solana-devnet.api.onfinality.io/public`  
+USDC mint: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`  
+Payer (public): `AtWCqPeRhHtdxLiA9B3QpyR2uLzbJTVVuLgDwVCbCx2S` (secret only in `/tmp/kickr-devnet-payer.json`, never committed).
+
+Scores/ranks came from the real Phase 6.1 scoring fixture. On-chain entry fee was scaled to available Devnet USDC (`2000000` base units × 2 seats) so deposits could complete; destinations remapped to the payer for the claim leaf. Result hash is **not** all-ones.
+
+| Field | Value |
+|---|---|
+| Contest PDA | `6JfYgriQ1YqNnUgMorqvVHYnEvfUcuwtPciYc9LLoF3a` |
+| Vault | `AkpoZHgDYLh1eJd772WhzYV2YMX16yrDDkepatggBRhb` |
+| Settlement PDA | `GaVWL5teJiKeZdupKDhmMxyzicYS7Bb5oRvLyjBFSMoM` |
+| result_hash | `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` |
+| merkle_root | `42371c23ee96d546796c78d6c174f00344f9924011b3716fdff2f736dc353a70` |
+| settlement_hash | `a5147cdd351d855dfd886a521a2b3ebcf82b6ea0b09260289956faca4f32d8b1` |
+| settlement tx (`commit_settlement`) | `SoCKK59GGxTpxVLAAwmuRs4CR9thKrPXYd4uvs8ZQaziVG2g34F4eTaaHrrn1noXViE8y4MtebJQnzC3uGDbLDt` |
+| claim tx (`claim_payout`) | `2CNjNBrvbRoVa8hxzoQW6SBDRZk2N6FkWP2VDG3MoBaTFePVipGXpYLZBwNJxVBh4Cbi3ioKDstLASw782Xhqfvv` |
+| Vault before / after | `4000000` → `400000` |
+| Claimed amount | `3600000` |
+| Fee retained in vault | `400000` |
+| Winner entry | `74f2db93-8137-4527-bdc8-5f3a4e5c8d31` |
+| Winner score / rank / payout | `19500` milli-points / rank `1` / `3600000` base units |
+| Destination | `AtWCqPeRhHtdxLiA9B3QpyR2uLzbJTVVuLgDwVCbCx2S` |
+
+Second claim: client/simulation blocked before a broadcast signature (`secondClaimBlockedBeforeSubmit: true`). No fabricated failed signature. Program-level replay protection remains covered by LiteSVM `settlement.rs`.
+
+### API / UI (Phase 6.1)
+
+- `GET /contests/:contestId/my-result` — caller entry only (contest, entry, team version, XI, captain, vice, scores, rank, prize, settlement/claim status, tx signature when verified).
+- Claim flow uses authorized backend proof for the authenticated entry; amounts/proof come from immutable approved settlement. Claim UI states: idle / claimable / wallet_signing / submitted / confirming / confirmed / failed / already_claimed. Never “Paid” before independent verification; never `setClaimed(true)` on wallet submit.

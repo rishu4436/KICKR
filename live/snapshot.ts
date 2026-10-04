@@ -56,6 +56,7 @@ export interface SnapshotStore {
   get(id: string): Promise<ResultSnapshotRecord | null>;
   getApprovedForEntry(entryId: string): Promise<ResultSnapshotRecord | null>;
   listByMatch(matchId: string): Promise<ResultSnapshotRecord[]>;
+  listApprovedForContest(contestId: string): Promise<ResultSnapshotRecord[]>;
 }
 
 export class InMemorySnapshotStore implements SnapshotStore {
@@ -107,6 +108,12 @@ export class InMemorySnapshotStore implements SnapshotStore {
   async listByMatch(matchId: string): Promise<ResultSnapshotRecord[]> {
     return [...this.rows.values()]
       .filter((row) => row.matchId === matchId)
+      .map((row) => structuredClone(row));
+  }
+
+  async listApprovedForContest(contestId: string): Promise<ResultSnapshotRecord[]> {
+    return [...this.rows.values()]
+      .filter((row) => row.contestId === contestId && row.status === "APPROVED")
       .map((row) => structuredClone(row));
   }
 }

@@ -26,6 +26,108 @@ export function registerSettlementRoutes(
     return c.json(publicSettlement(settlement));
   });
 
+
+  app.get("/contests/:id/my-result", async (c) => {
+    const principal = await authenticate(c);
+    const service = requireSettlement(deps);
+    const contestId = c.req.param("id");
+    const entries = await deps.contests.listDeposits(contestId);
+    const mine = entries.find((entry) => entry.wallet === principal.walletAddress && entry.status === "CONFIRMED");
+    if (!mine) {
+      throw new AppError("NOT_FOUND", 404, "No confirmed entry for this wallet on the contest");
+    }
+    const settlement = await service.getStatus(contestId);
+    const contest = await deps.contests.getContest(contestId);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Contest not found");
+    }
+    let row = null as Awaited<ReturnType<typeof service.getLeaderboard>>[number] | null;
+    let claimUiState = "pending_result";
+    if (settlement) {
+      const rows = await service.getLeaderboard(settlement.id);
+      row = rows.find((item) => item.entryId === mine.id) ?? null;
+      claimUiState = deriveClaimUiState(settlement.status, row);
+    }
+    const totalEntries = settlement?.confirmedEntries ?? entries.filter((e) => e.status === "CONFIRMED").length;
+    return c.json({
+      contestId,
+      matchId: contest.matchId,
+      entryId: mine.id,
+      teamVersionId: mine.teamVersionId,
+      xi: row?.xi ?? null,
+      captainId: row?.captainId ?? null,
+      viceId: row?.viceId ?? null,
+      baseScoreMilliPoints: row?.baseScoreMilliPoints ?? null,
+      finalScoreMilliPoints: row?.finalScoreMilliPoints ?? null,
+      rank: row?.rank ?? null,
+      totalEntries,
+      prizeBaseUnits: row?.netPayoutBaseUnits ?? null,
+      payoutStatus: row ? (row.netPayoutBaseUnits > 0 ? "WINNER" : "NO_PRIZE") : null,
+      settlementStatus: settlement?.status ?? null,
+      resultHash: settlement?.resultHash ?? null,
+      settlementHash: settlement?.settlementHash ?? null,
+      claimStatus: row?.claimStatus ?? "UNCLAIMED",
+      claimUiState,
+      claimSignature: row?.claimSignature ?? null,
+      explorerUrl: explorerUrl(row?.claimSignature ?? null, deps.config.public.solanaCluster),
+      stages: settlementStages(settlement?.status ?? null, row?.claimStatus ?? null),
+    });
+  });
+
+  app.post("/contests/:id/settlement/calculate", async (c) => {
+    const principal = await authenticate(c);
+    await authorize(c, "RUN_SCORING");
+    const orch = deps.settlementOrchestrator;
+    if (!orch) {
+      throw new AppError("NOT_FOUND", 404, "Settlement orchestrator is not available");
+    }
+    const settlement = await orch.calculateFromApprovedSnapshots({
+      contestId: c.req.param("id"),
+      matchSettlementGate: "FINAL",
+      actorId: principal.accountId,
+      nowIso: deps.clock().toISOString(),
+    });
+    await appendAudit(deps, c, principal, "RESULT_CALCULATED", settlement.id, {
+      contestId: settlement.contestId,
+      resultHash: settlement.resultHash,
+      settlementVersion: settlement.settlementVersion,
+    });
+    return c.json({
+      id: settlement.id,
+      status: settlement.status,
+      resultHash: settlement.resultHash,
+      settlementVersion: settlement.settlementVersion,
+    });
+  });
+
+  app.post("/settlements/:id/claim-submit", async (c) => {
+    const principal = await authenticate(c);
+    const service = requireSettlement(deps);
+    const body = (await c.req.json()) as { entryId: string; signature: string };
+    if (!body.entryId || !body.signature) {
+      throw new AppError("VALIDATION", 400, "entryId and signature required");
+    }
+    const proof = await service.claimProof(c.req.param("id"), body.entryId);
+    if (proof.row.destinationWallet !== principal.walletAddress) {
+      throw new AppError("FORBIDDEN", 403, "Claimant wallet does not match authenticated entry destination");
+    }
+    // Record submitted only — never claimed until reconcile verifies finalized chain tx.
+    const row = await service.markClaimSubmitted(
+      c.req.param("id"),
+      body.entryId,
+      body.signature,
+      deps.clock().toISOString(),
+    );
+    return c.json({
+      entryId: row.entryId,
+      claimStatus: row.claimStatus,
+      claimUiState: "submitted",
+      claimSignature: row.claimSignature,
+      explorerUrl: null,
+      note: "Submitted is not claimed. Wait for independent finalized verification.",
+    });
+  });
+
   app.get("/contests/:id/settlement/result", async (c) => {
     await authenticate(c);
     const service = requireSettlement(deps);
@@ -184,7 +286,9 @@ export function registerSettlementRoutes(
     const principal = await authenticate(c);
     await authorize(c, "RUN_SETTLEMENT");
     const service = requireSettlement(deps);
-    const settlement = await service.prepare(c.req.param("id"), deps.clock().toISOString());
+    const settlement = deps.settlementOrchestrator
+      ? await deps.settlementOrchestrator.prepareIfReady(c.req.param("id"), deps.clock().toISOString())
+      : await service.prepare(c.req.param("id"), deps.clock().toISOString());
     await appendAudit(deps, c, principal, "SETTLEMENT_PREPARED", settlement.id, {
       contestId: settlement.contestId,
       resultHash: settlement.resultHash,
@@ -377,6 +481,7 @@ async function appendAudit(
   c: Context<AppEnv>,
   principal: Principal,
   action:
+    | "RESULT_CALCULATED"
     | "RESULT_REVIEWED"
     | "RESULT_REJECTED"
     | "RESULT_APPROVED"
@@ -398,4 +503,37 @@ async function appendAudit(
     correlationId: c.get("requestId") ?? null,
     occurredAt: deps.clock(),
   });
+}
+
+
+function deriveClaimUiState(
+  settlementStatus: string | null | undefined,
+  row: { claimStatus: string; netPayoutBaseUnits: number } | null,
+): string {
+  if (!settlementStatus) return "pending_result";
+  if (["RESULT_CALCULATED", "RESULT_REVIEWED"].includes(settlementStatus)) return "pending_result";
+  if (["RESULT_APPROVED", "SETTLEMENT_APPROVED", "SETTLEMENT_PREPARED", "SETTLEMENT_SUBMITTED"].includes(settlementStatus)) {
+    return "prize_settlement_pending";
+  }
+  if (settlementStatus === "SETTLEMENT_FAILED") return "failed";
+  if (settlementStatus !== "SETTLEMENT_CONFIRMED") return "idle";
+  if (!row) return "idle";
+  if (row.claimStatus === "CLAIMED") return "confirmed";
+  if (row.claimStatus === "SUBMITTED") return "confirming";
+  if (row.claimStatus === "FAILED") return "failed";
+  if (row.netPayoutBaseUnits <= 0) return "idle";
+  return "claimable";
+}
+
+function settlementStages(status: string | null, claimStatus: string | null): string[] {
+  const stages = ["MATCH FINAL", "Result Processing", "Results Verified", "Prize Committed", "Claim Available"];
+  if (!status) return ["MATCH FINAL", "Result Processing"];
+  if (["RESULT_CALCULATED", "RESULT_REVIEWED"].includes(status)) return stages.slice(0, 2);
+  if (["RESULT_APPROVED", "SETTLEMENT_APPROVED"].includes(status)) return stages.slice(0, 3);
+  if (["SETTLEMENT_PREPARED", "SETTLEMENT_SUBMITTED"].includes(status)) return stages.slice(0, 4);
+  if (status === "SETTLEMENT_CONFIRMED") {
+    if (claimStatus === "CLAIMED") return [...stages, "Prize Claimed"];
+    return stages;
+  }
+  return stages.slice(0, 1);
 }

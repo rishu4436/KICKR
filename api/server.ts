@@ -21,6 +21,8 @@ import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
 import type { LiveScoringService } from "../live/service.js";
 import type { SettlementService } from "../settlement/service.js";
+import type { SettlementOrchestrator } from "../settlement/orchestrator.js";
+import type { SnapshotStore } from "../live/snapshot.js";
 import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import { existsSync } from "node:fs";
@@ -42,6 +44,8 @@ export interface AppDeps {
   contests: ContestService;
   live?: LiveScoringService;
   settlement?: SettlementService;
+  settlementOrchestrator?: SettlementOrchestrator;
+  snapshots?: SnapshotStore;
   redis: RedisClient;
   clientDir?: string;
   logger: Logger;

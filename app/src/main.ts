@@ -233,12 +233,16 @@ function contestTitle(card: ContestCard): string {
 
 async function renderContests(id: string): Promise<void> {
   const data = await api<{ contests: ContestCard[] }>(`/matches/${id}/contests`);
+
   const cards = data.contests.map((contest) => `<article class="card">
       <div class="meta"><span>${contest.templateCode}</span><span>${contest.filledCount}/${contest.capacity}</span></div>
       <h2>${contestTitle(contest)}</h2>
       <p class="quiet">${formatUsdc(contest.entryFeeBaseUnits)} USDC entry · ${contest.remaining} seats left · ${contest.status.replaceAll("_", " ")}</p>
       <p class="quiet">Estimated pool ${formatUsdc(contest.estimatedPrizePoolBaseUnits)} USDC. ${contest.estimateLabel}.</p>
-      <p class="quiet">Settlement stages: Match Final → Result Processing → Results Verified → Prize Available → Claim Prize</p>
+      <div class="settlement-card" data-contest-id="${contest.contestId}">
+        <p class="quiet">Stages: MATCH FINAL → Result Processing → Results Verified → Prize Committed → Claim Available</p>
+        <div class="my-result quiet">Loading your result…</div>
+      </div>
       <button class="primary" data-join="${contest.contestId}">Join</button>
     </article>`).join("");
   app.innerHTML = shell("Contests", `
@@ -246,6 +250,8 @@ async function renderContests(id: string): Promise<void> {
     ${cards || `<p class="quiet">No open contests.</p>`}
     ${joinPanel()}
   `);
+  void hydrateContestSettlements();
+
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-join]")) {
     button.addEventListener("click", () => {
       void joinContest(id, button.dataset.join ?? "");
@@ -755,3 +761,81 @@ window.addEventListener("hashchange", () => {
   void render();
 });
 void render();
+
+async function hydrateContestSettlements(): Promise<void> {
+  if (!state.token) return;
+  for (const card of document.querySelectorAll<HTMLElement>(".settlement-card")) {
+    const contestId = card.dataset.contestId;
+    const target = card.querySelector(".my-result");
+    if (!contestId || !target) continue;
+    try {
+      const result = await api<{
+        settlementStatus: string | null;
+        claimUiState: string;
+        rank: number | null;
+        finalScoreMilliPoints: number | null;
+        totalEntries: number;
+        prizeBaseUnits: number | null;
+        claimStatus: string;
+        claimSignature: string | null;
+        explorerUrl: string | null;
+        entryId: string;
+        stages: string[];
+      }>(`/contests/${contestId}/my-result`);
+      const score = result.finalScoreMilliPoints == null ? "—" : (result.finalScoreMilliPoints / 1000).toFixed(1);
+      const prize = result.prizeBaseUnits == null ? "—" : (result.prizeBaseUnits / 1_000_000).toFixed(2);
+      const stages = (result.stages ?? []).join(" → ");
+      let body = `<p><strong>MATCH FINAL</strong></p>
+        <p>Score ${score} · Rank ${result.rank ?? "—"} / ${result.totalEntries} · Prize ${prize} USDC</p>
+        <p class="quiet">${stages}</p>`;
+      if (result.claimUiState === "pending_result" || !result.settlementStatus) {
+        body += `<p>Result processing</p>`;
+      } else if (result.claimUiState === "prize_settlement_pending") {
+        body += `<p>Prize settlement pending</p>`;
+      } else if (result.claimUiState === "claimable") {
+        body += `<button type="button" class="primary claim-btn">Claim Prize</button>
+          <p class="quiet">Not paid until the chain tx is independently verified.</p>`;
+      } else if (result.claimUiState === "submitted" || result.claimUiState === "confirming") {
+        body += `<p>Transaction submitted — confirming on Solana…</p>`;
+      } else if (result.claimUiState === "confirmed" && result.explorerUrl) {
+        body += `<p><strong>Prize claimed</strong> · ${prize} USDC · Transaction verified ·
+          <a href="${result.explorerUrl}" target="_blank" rel="noreferrer">View on Solana</a></p>`;
+      } else if (result.prizeBaseUnits === 0) {
+        body += `<p>Prize 0 USDC</p>`;
+      } else if (result.claimUiState === "failed") {
+        body += `<p>Claim failed — reconcile chain before retry.</p>`;
+      }
+      target.innerHTML = body;
+      const btn = target.querySelector(".claim-btn");
+      if (btn) {
+        btn.addEventListener("click", () => {
+          void startClaim(contestId, result.entryId, target);
+        });
+      }
+    } catch {
+      target.innerHTML = `<p class="quiet">Confirmed entry required to view your result.</p>`;
+    }
+  }
+}
+
+async function startClaim(contestId: string, entryId: string, target: Element): Promise<void> {
+  target.innerHTML = `<p>wallet_signing… fetching authorized claim proof</p>`;
+  try {
+    const claim = await api<{
+      amountBaseUnits: number;
+      settlementVersion: number;
+      claimStatus: string;
+    }>(`/entries/${entryId}/claim?contestId=${contestId}`);
+    if (claim.claimStatus === "CLAIMED") {
+      target.innerHTML = `<p>already_claimed</p>`;
+      return;
+    }
+    target.innerHTML = `<p>Claim proof ready for ${claim.amountBaseUnits} base units (settlement v${claim.settlementVersion}).
+      Sign claim_payout in your wallet, then submit the signature for reconciliation.
+      UI shows Prize claimed only after verified confirmation — never on click.</p>
+      <p class="quiet">States: idle → claimable → wallet_signing → submitted → confirming → confirmed</p>`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "error";
+    target.innerHTML = `<p>Claim unavailable: ${message}</p>`;
+  }
+}
