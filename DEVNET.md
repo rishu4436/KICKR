@@ -49,7 +49,7 @@ Explorer, after a real finalized signature exists:
 
 ## This machine
 
-Program id in source: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`. Not deployed. A `getAccountInfo` on that address returned null, so there is no on-chain program account to query.
+Program id in source: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`. The first query returned null. A later deploy on Devnet is recorded below.
 
 A throwaway payer was created only in `/tmp` (not in git). `solana airdrop 2` against `https://api.devnet.solana.com` failed: `error sending request for url (https://api.devnet.solana.com/)`. No devnet transaction was signed or broadcast. There is no vault address, no deposit signature, and no explorer link. Local LiteSVM tests are the proof that ran. This is not a fake devnet signature.
 
@@ -59,8 +59,18 @@ Live devnet end-to-end is a manual release gate. `.github/workflows/ci.yml` runs
 
 `https://api.devnet.solana.com` still fails from this host: DNS for that name is `198.18.0.1`, then TLS `unexpected eof while reading`. That is not a successful cluster query.
 
-A documented public Devnet RPC did answer: `https://solana-devnet.api.onfinality.io/public`. `getGenesisHash` was `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (Devnet, not mainnet). `getVersion` / `solana cluster-version` reported solana-core 4.3.0. `getLatestBlockhash` at commitment `finalized` succeeded (example context slot `507198756`) before the endpoint started returning HTTP-level rate limits. Ankr and Helius public hosts required an API key. `https://solana-devnet.public.blastapi.io` failed TLS the same way as the official host. No mainnet RPC was used.
+A documented public Devnet RPC did answer: `https://solana-devnet.api.onfinality.io/public`. `getGenesisHash` was `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (Devnet, not mainnet). `getVersion` / `solana cluster-version` reported solana-core 4.3.0. No mainnet RPC was used.
 
-`solana airdrop 1` for the throwaway payer against the OnFinality Devnet URL failed: `airdrop request failed. This can happen when the rate limit is reached.` Balance stayed `0 SOL`. Deploy was not attempted. `requestAirdrop` JSON-RPC on that host returned `Invalid request` before the later rate limit. No deploy signature exists.
+The throwaway payer `AtWCqPeRhHtdxLiA9B3QpyR2uLzbJTVVuLgDwVCbCx2S` later showed `5 SOL` on that RPC (5_000_000_000 lamports, confirmed). The key stayed in `/tmp` and was not committed. `solana program deploy` of `escrow/target/deploy/kickr_escrow.so` with the matching program keypair succeeded.
 
-`USDC_MINT` in `.env.example` is blank, and there is no `.env`. Phase 4.1 does not create a substitute mint. Initialize, contest create, reservation, deposit, and the indexer were not run. `docs/devnet-proof.md` is intentionally absent: there is no finalized signature to publish.
+- Program id: `DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN`
+- Deploy signature: `5xkY9Dzbk2e3dsiGGW7YmHtF8WbkohA6VgeyqaK1w9yN9kzvJt66smt2ABcRG1cYKyMJ53Hw3sN47t2GRrj9eo8v`
+- Deploy slot: `507201818`, finalized, `meta.err` null. Account is executable, owner `BPFLoaderUpgradeab1e11111111111111111111111`.
+
+Circle publishes Solana Devnet USDC as `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` at <https://developers.circle.com/stablecoins/usdc-contract-addresses>. On this RPC the mint exists, owner `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`, decimals 6. It was set only in a gitignored local `.env`. `.env.example` stays blank.
+
+`initialize_config` signature `4FJ9TCsd4GeQPFfUwTqWxT9etwrBLsVvVZdsUCm4xRohbzxhtKDNesqkx4eWKo8kW6VvL3wzQAA1nnvUen7Xnw5U`, slot `507202579`, finalized, success. Config PDA `J87z2ui9vP62U6gjGDiK23QdxVhr4j2FLwcRpzyQKb5y` stores that mint, the token program, and decimals 6. There is no withdrawal authority.
+
+The API `GET /matches/10000000-0000-4000-8000-000000000001/contests` created H2H-5 off chain: contest `2ee3b8b1-cb75-426e-a2d0-9c36d734d9f8`, fee `5000000`, capacity `2`, status `OPEN`, lock `2026-10-10T15:00:00.000Z`, filled `0/2`. `initialize_contest` signature `3CTaMKAQiuYiV6hHsbDQyPjo31oxPm761GKjtuLGtQVEbRQdjULtVChFdTwh7A1Bo87SL8mcEuJ74pw6LiXK6X2i`, slot `507202613`, finalized, success. Contest PDA `DEQHAiMiKeVQdWzvxVjcPaaaMExiUpcguKMHJzGk2Ukb`. Vault `3HpRkESYi5PY4hm8CnumNN3R2jdWYcCHV37eSZ5suVex` is that PDA's USDC ATA, amount 0, decimals 6. On-chain fee, capacity, lock, and status `0` (joinable) match the off-chain row.
+
+Deposit did not run. The payer's USDC balance of that mint is 0. Circle's public faucet (`https://faucet.circle.com/api/graphql`, `requestToken`) returned `RECAPTCHA_ERROR`. No substitute mint was created. No reservation, no deposit signature, no indexer run, and no `ENTRY_CONFIRMED`. `docs/devnet-proof.md` is still absent.
