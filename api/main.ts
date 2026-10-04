@@ -21,7 +21,7 @@ import { InMemoryRateLimiter } from "../shared/rate-limit.js";
 import { systemClock } from "../shared/clock.js";
 import { ConfigError } from "../shared/errors.js";
 import { createApp } from "./server.js";
-import { InMemorySettlementStore } from "../settlement/memory-store.js";
+import { createPgSettlementStore } from "../db/settlement-repository.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import { InMemorySnapshotStore } from "../live/snapshot.js";
@@ -129,7 +129,7 @@ if (sportsRuntime.liveConfigured) {
 }
 
 const snapshots = new InMemorySnapshotStore();
-const settlement = new SettlementService(new InMemorySettlementStore());
+const settlement = new SettlementService(createPgSettlementStore(db));
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
 const app = createApp({
   config,

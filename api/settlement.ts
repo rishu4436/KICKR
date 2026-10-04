@@ -51,6 +51,22 @@ export function registerSettlementRoutes(
       claimUiState = deriveClaimUiState(settlement.status, row);
     }
     const totalEntries = settlement?.confirmedEntries ?? entries.filter((e) => e.status === "CONFIRMED").length;
+    // Claim material only after an independently confirmed settlement, and only for this principal.
+    let claimPlan: ClaimPlan | null = null;
+    if (
+      settlement?.status === "SETTLEMENT_CONFIRMED" &&
+      settlement.merkleRoot &&
+      row &&
+      row.destinationWallet === principal.walletAddress &&
+      row.claimStatus !== "CLAIMED" &&
+      row.netPayoutBaseUnits > 0
+    ) {
+      const proof = await service.claimProof(settlement.id, mine.id);
+      if (proof.row.destinationWallet !== principal.walletAddress) {
+        throw new AppError("FORBIDDEN", 403, "Claim material is only available for the authenticated entry destination");
+      }
+      claimPlan = buildAuthorizedClaimPlan(deps, settlement, proof);
+    }
     return c.json({
       contestId,
       matchId: contest.matchId,
@@ -68,11 +84,13 @@ export function registerSettlementRoutes(
       settlementStatus: settlement?.status ?? null,
       resultHash: settlement?.resultHash ?? null,
       settlementHash: settlement?.settlementHash ?? null,
+      settlementVersion: settlement?.settlementVersion ?? null,
       claimStatus: row?.claimStatus ?? "UNCLAIMED",
       claimUiState,
       claimSignature: row?.claimSignature ?? null,
       explorerUrl: explorerUrl(row?.claimSignature ?? null, deps.config.public.solanaCluster),
       stages: settlementStages(settlement?.status ?? null, row?.claimStatus ?? null),
+      claimPlan,
     });
   });
 
