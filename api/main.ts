@@ -55,6 +55,12 @@ const contests = new ContestService(
   createPgAuditStore(db),
   new ContestDiscoveryCache(redis, config.public.environment),
   config.server.contests,
+  {
+    programId: config.server.solana.escrowProgramId,
+    usdcMint: config.server.solana.usdcMint,
+    usdcDecimals: config.server.solana.usdcDecimals,
+    cluster: config.server.solana.cluster,
+  },
 );
 
 const app = createApp({

@@ -16,6 +16,9 @@ export const PUBLIC_CONFIG_KEYS = [
   "environment",
   "authDomain",
   "solanaCluster",
+  "escrowProgramId",
+  "usdcMint",
+  "usdcDecimals",
   "sportsDataProvider",
 ] as const;
 
@@ -26,6 +29,10 @@ export interface PublicConfig {
   environment: "development" | "test" | "production";
   authDomain: string;
   solanaCluster: string;
+  escrowProgramId: string;
+  /** Blank until a devnet mint is configured. Never the mainnet USDC mint. */
+  usdcMint: string;
+  usdcDecimals: number;
   sportsDataProvider: string;
 }
 
@@ -44,6 +51,9 @@ export interface ServerConfig {
   };
   solana: {
     cluster: string;
+    escrowProgramId: string;
+    usdcMint: string;
+    usdcDecimals: number;
   };
   sportsData: {
     provider: string;

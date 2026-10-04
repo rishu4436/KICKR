@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import type { Principal } from "../auth/types.js";
+import type { Permission } from "../rbac/permissions.js";
 import { AppError } from "../shared/errors.js";
 import type { AppDeps, AppEnv } from "./server.js";
 
@@ -11,10 +12,15 @@ const reserveSchema = z.object({
   wallet: z.string().min(32).max(44).optional(),
 }).strict();
 
+const submissionSchema = z.object({
+  signature: z.string().min(64).max(100),
+}).strict();
+
 export function registerContestRoutes(
   app: Hono<AppEnv>,
   deps: AppDeps,
   authenticate: (c: Context<AppEnv>) => Promise<Principal>,
+  authorize: (c: Context<AppEnv>, permission: Permission) => Promise<void>,
 ): void {
   app.get("/matches/:id/contests", async (c) => {
     await authenticate(c);
@@ -52,6 +58,52 @@ export function registerContestRoutes(
       context(deps, c),
     );
     return c.json(reservation);
+  });
+
+  app.post("/reservations/:id/deposit-submission", async (c) => {
+    const principal = await authenticate(c);
+    const body = submissionSchema.parse(await readBody(c));
+    const submitted = await deps.contests.submitDepositSignature(
+      c.req.param("id"),
+      principal.walletAddress,
+      body.signature,
+      context(deps, c),
+    );
+    return c.json(submitted, 202);
+  });
+
+  app.get("/contests/:id/deposits", async (c) => {
+    await authenticate(c);
+    await authorize(c, "READ_CONTEST");
+    const deposits = await deps.contests.listDeposits(c.req.param("id"));
+    return c.json({
+      deposits: deposits.map((entry) => ({
+        entryId: entry.id,
+        contestId: entry.contestId,
+        wallet: entry.wallet,
+        teamVersionId: entry.teamVersionId,
+        status: entry.status,
+        confirmationStatus: entry.confirmationStatus,
+        depositSignature: entry.depositSignature,
+        confirmedSlot: entry.confirmedSlot,
+        amountBaseUnits: entry.chainAmountBaseUnits,
+        mint: entry.mint,
+        vault: entry.vaultAddress,
+        depositReceipt: entry.depositReceipt,
+      })),
+    });
+  });
+
+  app.get("/deposits/health", async (c) => {
+    await authenticate(c);
+    await authorize(c, "READ_SYSTEM");
+    const health = await deps.contests.depositHealth();
+    return c.json({
+      ...health,
+      rpcErrors: null,
+      indexerLagMs: null,
+      note: "RPC errors and indexer lag are counted by the indexer process. This response has no credentials and cannot confirm a deposit.",
+    });
   });
 }
 

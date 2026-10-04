@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 3: contest templates, rooms, and join quotes before real money.",
+  "description": "KICKR Phase 4: devnet contest deposits. No settlement and no mainnet mint.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -18,7 +18,11 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",
+    "@noble/hashes": "^1.8.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
+    "buffer": "^6.0.3",
     "hono": "^4.13.12",
     "ioredis": "^6.0.0",
     "pg": "^8.23.1",

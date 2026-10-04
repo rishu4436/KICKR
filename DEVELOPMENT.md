@@ -25,12 +25,13 @@ The migration runner expects the process working directory to be the repository 
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Vitest. No live Postgres or Redis. |
+| `cd escrow && anchor test --skip-deploy` | LiteSVM program tests. Not run by GitHub Actions. |
 | `npm run build` | Compile to `dist/` |
 | `npm run dev` | API via tsx |
 | `npm run db:migrate` | Apply SQL migrations |
 | `npm start` | Run compiled `dist/api/main.js` |
 
-GitHub Actions (`.github/workflows/ci.yml`) runs lint, typecheck, test, and build. It does not start Postgres or Redis.
+GitHub Actions (`.github/workflows/ci.yml`) runs lint, typecheck, test, and build. It does not start Postgres or Redis and it does not install Anchor. Run `cd escrow && anchor test --skip-deploy` locally before a Phase 4 push. See `DEVNET.md`.
 
 ## Auth in local tests
 

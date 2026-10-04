@@ -1,5 +1,8 @@
 name: ci
 
+# Anchor tests are a local gate: cd escrow && anchor test
+# This workflow does not install the Solana or Anchor toolchain.
+
 on:
   push:
   pull_request:

@@ -37,6 +37,9 @@ export function testConfig(overrides?: {
       environment: "test",
       authDomain: "localhost",
       solanaCluster: "devnet",
+      escrowProgramId: "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN",
+      usdcMint: "",
+      usdcDecimals: 6,
       sportsDataProvider: "unset",
     },
     server: {
@@ -49,7 +52,12 @@ export function testConfig(overrides?: {
         sessionTtlSeconds: 3600,
       },
       rateLimit: { authMax: 30, authWindowSeconds: 60 },
-      solana: { cluster: "devnet" },
+      solana: {
+        cluster: "devnet",
+        escrowProgramId: "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN",
+        usdcMint: "",
+        usdcDecimals: 6,
+      },
       sportsData: { provider: "unset" },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },
       contests: {

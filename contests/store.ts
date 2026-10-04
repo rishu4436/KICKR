@@ -1,5 +1,35 @@
 import type { ContestLimits, ContestRecord, ContestTemplateRecord, EntryRecord, OutboxRecord, ReservationRecord } from "./types.js";
 
+export interface ConfirmDepositInput {
+  reservationId: string;
+  signature: string;
+  slot: number;
+  blockTime: number | null;
+  amountBaseUnits: number;
+  mint: string;
+  vault: string;
+  depositReceipt: string;
+  contestPda: string;
+  teamVersionId: string;
+  now: Date;
+}
+
+export interface ConfirmDepositResult {
+  contest: ContestRecord;
+  reservation: ReservationRecord;
+  entry: EntryRecord;
+  idempotent: boolean;
+}
+
+export interface DepositHealth {
+  pendingReservations: number;
+  pendingEntries: number;
+  submittedDeposits: number;
+  rejectedDeposits: number;
+  verifiedDeposits: number;
+  reconciliationMismatches: number;
+}
+
 export interface EnsureResult {
   contest: ContestRecord;
   created: boolean;
@@ -51,4 +81,9 @@ export interface ContestStore {
   lockJoinableForMatch(matchId: string, now: Date): Promise<ContestRecord[]>;
   listUnpublishedOutbox(): Promise<OutboxRecord[]>;
   markOutboxPublished(ids: readonly string[], now: Date): Promise<void>;
+  findReservationByNonceHash(hash: string): Promise<ReservationRecord | null>;
+  submitDeposit(reservationId: string, signature: string, now: Date): Promise<ReservationRecord>;
+  confirmVerifiedDeposit(input: ConfirmDepositInput): Promise<ConfirmDepositResult>;
+  recordRejection(input: { signature: string; reason: string; reservationId: string | null }): Promise<void>;
+  depositHealth(): Promise<DepositHealth>;
 }

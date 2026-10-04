@@ -14,6 +14,7 @@ import type {
   RulesSnapshot,
 } from "../contests/types.js";
 import { ESCROW_PLACEHOLDER } from "../contests/types.js";
+import { nonceHash, toHex } from "../solana/escrow.js";
 import { AppError } from "../shared/errors.js";
 import { newId, newNonce } from "../shared/ids.js";
 import { asDate, asString } from "./mappers.js";
@@ -90,6 +91,10 @@ function contestFrom(row: Row): ContestRecord {
     updatedAt: asDate(row.updated_at).toISOString(),
     lockedAt: row.locked_at == null ? null : asDate(row.locked_at).toISOString(),
     completedAt: row.completed_at == null ? null : asDate(row.completed_at).toISOString(),
+    confirmedCount: row.confirmed_count == null ? 0 : asInt(row.confirmed_count),
+    escrowPda: row.escrow_pda == null ? null : asString(row.escrow_pda),
+    vaultAddress: row.vault_address == null ? null : asString(row.vault_address),
+    usdcMint: row.usdc_mint == null ? null : asString(row.usdc_mint),
   };
 }
 
@@ -106,6 +111,10 @@ function reservationFrom(row: Row): ReservationRecord {
     issuedAt: asDate(row.issued_at).toISOString(),
     expiresAt: asDate(row.expires_at).toISOString(),
     status: asString(row.status) as ReservationStatus,
+    nonceHash: row.nonce_hash == null ? "" : asString(row.nonce_hash),
+    depositSignature: row.deposit_signature == null ? null : asString(row.deposit_signature),
+    submittedAt: row.submitted_at == null ? null : asDate(row.submitted_at).toISOString(),
+    confirmationStatus: (row.confirmation_status == null ? "NONE" : asString(row.confirmation_status)) as ReservationRecord["confirmationStatus"],
     createdAt: asDate(row.created_at).toISOString(),
     updatedAt: asDate(row.updated_at).toISOString(),
   };
@@ -121,13 +130,22 @@ function entryFrom(row: Row): EntryRecord {
     status: asString(row.status) as EntryStatus,
     seatNumber: asInt(row.seat_number),
     joinedAt: asDate(row.joined_at).toISOString(),
+    confirmationStatus: (row.confirmation_status == null ? "PENDING" : asString(row.confirmation_status)) as EntryRecord["confirmationStatus"],
+    depositSignature: row.deposit_signature == null ? null : asString(row.deposit_signature),
+    confirmedSlot: row.confirmed_slot == null ? null : asInt(row.confirmed_slot),
+    confirmedBlockTime: row.confirmed_block_time == null ? null : asDate(row.confirmed_block_time).toISOString(),
+    chainAmountBaseUnits: row.chain_amount_base_units == null ? null : asInt(row.chain_amount_base_units),
+    mint: row.mint == null ? null : asString(row.mint),
+    vaultAddress: row.vault_address == null ? null : asString(row.vault_address),
+    depositReceipt: row.deposit_receipt == null ? null : asString(row.deposit_receipt),
     createdAt: asDate(row.created_at).toISOString(),
     updatedAt: asDate(row.updated_at).toISOString(),
   };
 }
 
 const CONTEST_COLUMNS = `id, template_id, match_id, contest_type, status, capacity, filled_count,
-  entry_fee_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at`;
+  entry_fee_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at,
+  confirmed_count, escrow_pda, vault_address, usdc_mint`;
 
 async function loadTemplate(db: Queryable, id: string): Promise<ContestTemplateRecord | null> {
   const result = await db.query<Row>(
@@ -213,6 +231,10 @@ async function insertContest(
     updatedAt: nowIso,
     lockedAt: null,
     completedAt: null,
+    confirmedCount: 0,
+    escrowPda: null,
+    vaultAddress: null,
+    usdcMint: null,
   };
 }
 
@@ -382,9 +404,9 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         await tx.query(
           `INSERT INTO contest_reservations (
              id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
-             escrow_placeholder, issued_at, expires_at, status, created_at, updated_at
-           ) VALUES ($1,$2,$3,$4,$5,'USDC',$6,$7::jsonb,$8,$9,'PENDING',$8,$8)`,
-          [reservationId, contest.id, input.wallet, input.teamVersionId, contest.entryFeeBaseUnits, nonce, JSON.stringify(ESCROW_PLACEHOLDER), nowIso, expires],
+             escrow_placeholder, issued_at, expires_at, status, nonce_hash, created_at, updated_at
+           ) VALUES ($1,$2,$3,$4,$5,'USDC',$6,$7::jsonb,$8,$9,'PENDING',$10,$8,$8)`,
+          [reservationId, contest.id, input.wallet, input.teamVersionId, contest.entryFeeBaseUnits, nonce, JSON.stringify(ESCROW_PLACEHOLDER), nowIso, expires, toHex(nonceHash(nonce))],
         );
         await tx.query(
           `INSERT INTO contest_entries (
@@ -424,6 +446,10 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
             issuedAt: nowIso,
             expiresAt: expires,
             status: "PENDING",
+            nonceHash: toHex(nonceHash(nonce)),
+            depositSignature: null,
+            submittedAt: null,
+            confirmationStatus: "NONE",
             createdAt: nowIso,
             updatedAt: nowIso,
           },
@@ -436,6 +462,14 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
             status: "PENDING",
             seatNumber,
             joinedAt: nowIso,
+            confirmationStatus: "PENDING",
+            depositSignature: null,
+            confirmedSlot: null,
+            confirmedBlockTime: null,
+            chainAmountBaseUnits: null,
+            mint: null,
+            vaultAddress: null,
+            depositReceipt: null,
             createdAt: nowIso,
             updatedAt: nowIso,
           },
@@ -549,6 +583,150 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         `UPDATE contest_outbox SET published_at = $2 WHERE id = ANY($1::uuid[]) AND published_at IS NULL`,
         [ids, now.toISOString()],
       );
+    },
+
+    async findReservationByNonceHash(hash) {
+      const result = await db.query<Row>(
+        `SELECT id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                submitted_at, confirmation_status, created_at, updated_at
+         FROM contest_reservations WHERE nonce_hash = $1`,
+        [hash],
+      );
+      const row = result.rows[0];
+      return row ? reservationFrom(row) : null;
+    },
+    async submitDeposit(reservationId, signature, now) {
+      const result = await db.query<Row>(
+        `UPDATE contest_reservations
+         SET deposit_signature = $2, submitted_at = $3, confirmation_status = 'SUBMITTED', updated_at = $3
+         WHERE id = $1 AND status = 'PENDING' AND expires_at > $3
+         RETURNING id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                   escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                   submitted_at, confirmation_status, created_at, updated_at`,
+        [reservationId, signature, now.toISOString()],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+      }
+      return reservationFrom(row);
+    },
+    async confirmVerifiedDeposit(input) {
+      return withTransaction(pool, async (tx) => {
+        const selected = await tx.query<Row>(
+          `SELECT e.id FROM contest_entries e WHERE e.reservation_id = $1 FOR UPDATE`,
+          [input.reservationId],
+        );
+        if (!selected.rows[0]) {
+          throw new AppError("NOT_FOUND", 404, "Not found");
+        }
+        const current = await tx.query<Row>(
+          `SELECT status, deposit_signature, team_version_id FROM contest_entries WHERE reservation_id = $1`,
+          [input.reservationId],
+        );
+        const entryRow = current.rows[0];
+        if (!entryRow) {
+          throw new AppError("NOT_FOUND", 404, "Not found");
+        }
+        if (asString(entryRow.team_version_id) !== input.teamVersionId) {
+          throw new AppError("TEAM_VERSION_MISMATCH", 409, "Entry team version does not match the deposit");
+        }
+        if (asString(entryRow.status) === "CONFIRMED" && asString(entryRow.deposit_signature) === input.signature) {
+          const reservation = await tx.query<Row>(
+            `SELECT id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                    escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                    submitted_at, confirmation_status, created_at, updated_at
+             FROM contest_reservations WHERE id = $1`,
+            [input.reservationId],
+          );
+          const contest = await tx.query<Row>(`SELECT ${CONTEST_COLUMNS} FROM contests WHERE id = (SELECT contest_id FROM contest_reservations WHERE id = $1)`, [input.reservationId]);
+          const entry = await tx.query<Row>(
+            `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                    confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                    mint, vault_address, deposit_receipt, created_at, updated_at
+             FROM contest_entries WHERE reservation_id = $1`,
+            [input.reservationId],
+          );
+          return {
+            contest: contestFrom(contest.rows[0] as Row),
+            reservation: reservationFrom(reservation.rows[0] as Row),
+            entry: entryFrom(entry.rows[0] as Row),
+            idempotent: true,
+          };
+        }
+        const nowIso = input.now.toISOString();
+        const blockTime = input.blockTime === null ? null : new Date(input.blockTime * 1000).toISOString();
+        const updatedEntry = await tx.query(
+          `UPDATE contest_entries
+           SET status = 'CONFIRMED', confirmation_status = 'CONFIRMED', deposit_signature = $2,
+               confirmed_slot = $3, confirmed_block_time = $4, chain_amount_base_units = $5,
+               mint = $6, vault_address = $7, deposit_receipt = $8, updated_at = $9
+           WHERE reservation_id = $1 AND status = 'PENDING' AND team_version_id = $10`,
+          [input.reservationId, input.signature, input.slot, blockTime, input.amountBaseUnits, input.mint, input.vault, input.depositReceipt, nowIso, input.teamVersionId],
+        );
+        if ((updatedEntry.rowCount ?? 0) !== 1) {
+          throw new AppError("DUPLICATE", 409, "Deposit already recorded");
+        }
+        await tx.query(
+          `UPDATE contest_reservations
+           SET status = 'CONFIRMED', confirmation_status = 'VERIFIED', deposit_signature = $2, updated_at = $3
+           WHERE id = $1 AND status = 'PENDING'`,
+          [input.reservationId, input.signature, nowIso],
+        );
+        await tx.query(
+          `UPDATE contests c
+           SET confirmed_count = confirmed_count + 1, escrow_pda = $2, vault_address = $3, usdc_mint = $4, updated_at = $5
+           FROM contest_reservations r
+           WHERE r.id = $1 AND c.id = r.contest_id`,
+          [input.reservationId, input.contestPda, input.vault, input.mint, nowIso],
+        );
+        const reservation = await tx.query<Row>(
+          `SELECT id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                  escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                  submitted_at, confirmation_status, created_at, updated_at
+           FROM contest_reservations WHERE id = $1`,
+          [input.reservationId],
+        );
+        const contest = await tx.query<Row>(`SELECT ${CONTEST_COLUMNS} FROM contests WHERE id = (SELECT contest_id FROM contest_reservations WHERE id = $1)`, [input.reservationId]);
+        const entry = await tx.query<Row>(
+          `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                  confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                  mint, vault_address, deposit_receipt, created_at, updated_at
+           FROM contest_entries WHERE reservation_id = $1`,
+          [input.reservationId],
+        );
+        return {
+          contest: contestFrom(contest.rows[0] as Row),
+          reservation: reservationFrom(reservation.rows[0] as Row),
+          entry: entryFrom(entry.rows[0] as Row),
+          idempotent: false,
+        };
+      });
+    },
+    async recordRejection(input) {
+      await db.query(
+        `INSERT INTO deposit_reconciliations (
+           id, signature, status, reason, reservation_id, created_at
+         ) VALUES ($1, $2, 'REJECTED', $3, $4, now())
+         ON CONFLICT (signature) DO NOTHING`,
+        [newId(), input.signature, input.reason, input.reservationId],
+      );
+    },
+    async depositHealth() {
+      const pendingReservations = await db.query(`SELECT id FROM contest_reservations WHERE status = 'PENDING'`);
+      const pendingEntries = await db.query(`SELECT id FROM contest_entries WHERE status = 'PENDING'`);
+      const submitted = await db.query(`SELECT id FROM contest_reservations WHERE confirmation_status = 'SUBMITTED'`);
+      const rejected = await db.query(`SELECT id FROM deposit_reconciliations WHERE status = 'REJECTED'`);
+      const verified = await db.query(`SELECT id FROM contest_entries WHERE status = 'CONFIRMED'`);
+      return {
+        pendingReservations: pendingReservations.rowCount ?? 0,
+        pendingEntries: pendingEntries.rowCount ?? 0,
+        submittedDeposits: submitted.rowCount ?? 0,
+        rejectedDeposits: rejected.rowCount ?? 0,
+        verifiedDeposits: verified.rowCount ?? 0,
+        reconciliationMismatches: rejected.rowCount ?? 0,
+      };
     },
   };
 }

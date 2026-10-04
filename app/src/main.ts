@@ -1,5 +1,11 @@
+import { Buffer } from "buffer";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import { Connection, Keypair, type Transaction } from "@solana/web3.js";
+import { buildDepositTransaction, type DepositPlan } from "../../solana/escrow.js";
+import { assertDevCluster } from "../../solana/ids.js";
+
+Object.assign(globalThis, { Buffer });
 import { calculateCreditsUsed, remainingCredits } from "../../domain/football/credits.js";
 import { formationLabel } from "../../domain/football/presentation.js";
 import { validateFantasyTeam } from "../../domain/football/validate-team.js";
@@ -50,6 +56,13 @@ const state: {
   teamVersionId: string | null;
   teamMatchId: string | null;
   joinNote: string;
+  joinPhase: "RESERVING" | "AWAITING_WALLET" | "SUBMITTED" | "VERIFYING" | "CONFIRMED" | "FAILED" | "EXPIRED" | "";
+  depositPlan: DepositPlan | null;
+  depositSignature: string | null;
+  publicCluster: string;
+  publicProgramId: string;
+  publicMint: string;
+  publicDecimals: number;
 } = {
   token: sessionStorage.getItem("kickr.dev.token"),
   bucket: "upcoming",
@@ -59,6 +72,13 @@ const state: {
   teamVersionId: sessionStorage.getItem("kickr.dev.teamVersion"),
   teamMatchId: sessionStorage.getItem("kickr.dev.teamMatch"),
   joinNote: "",
+  joinPhase: "",
+  depositPlan: null,
+  depositSignature: null,
+  publicCluster: "devnet",
+  publicProgramId: "",
+  publicMint: "",
+  publicDecimals: 6,
 };
 
 function route(): string {
@@ -103,7 +123,7 @@ function shell(title: string, body: string): string {
     <div class="top"><div class="brand">KICKR</div><div class="quiet">${state.token ? "Development signer" : ""}</div></div>
     <h1>${title}</h1>
     ${body}
-    <p class="note">Credits are a squad budget, not USDC. Escrow does not exist in this build. Development matches are not a live feed.</p>
+    <p class="note">Credits are a squad budget, not USDC. A reservation is not a seat. Entry confirmed appears only after the backend verifies a finalized deposit. Development matches are not a live feed.</p>
   </div>`;
 }
 
@@ -223,37 +243,219 @@ async function renderContests(id: string): Promise<void> {
   app.innerHTML = shell("Contests", `
     <div class="row"><a class="quiet" href="#/matches/${id}">Match</a><a class="quiet" href="#/">Matches</a></div>
     ${cards || `<p class="quiet">No open contests.</p>`}
-    <p class="note" id="join-note">${state.joinNote}</p>
+    ${joinPanel()}
   `);
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-join]")) {
     button.addEventListener("click", () => {
       void joinContest(id, button.dataset.join ?? "");
     });
   }
+  document.querySelector("#sign-deposit")?.addEventListener("click", () => {
+    void signDeposit(id);
+  });
+}
+
+function joinPanel(): string {
+  if (!state.joinPhase) {
+    return `<p class="note" id="join-note">${escapeText(state.joinNote)}</p>`;
+  }
+  const plan = state.depositPlan;
+  const planText = plan
+    ? `<ul class="quiet">
+        <li>Contest ${escapeText(plan.contestId)}</li>
+        <li>Fee ${formatUsdc(plan.feeBaseUnits)} USDC (${plan.feeBaseUnits} base units)</li>
+        <li>Mint ${escapeText(plan.mint)}</li>
+        <li>Team version ${escapeText(plan.teamVersionId)}</li>
+        <li>Vault ${escapeText(plan.vault)}</li>
+        <li>Network ${escapeText(plan.cluster)}</li>
+        <li>Expires ${escapeText(plan.expiresAt)}</li>
+      </ul>`
+    : `<p class="quiet">Deposit plan is unavailable until a devnet USDC mint is configured.</p>`;
+  const signature = state.depositSignature
+    ? `<p>Signature ${escapeText(state.depositSignature)}</p><p><a href="${explorerTx(state.depositSignature, state.publicCluster)}">Explorer</a></p>`
+    : "";
+  const sign = state.joinPhase === "AWAITING_WALLET"
+    ? `<button class="primary" id="sign-deposit">Sign deposit</button>`
+    : "";
+  const label = phaseLabel(state.joinPhase);
+  return `<section class="card"><h2>${escapeText(label)}</h2>${planText}<p class="note">${escapeText(state.joinNote)}</p>${signature}${sign}</section>`;
+}
+
+function phaseLabel(phase: typeof state.joinPhase): string {
+  if (phase === "RESERVING") return "Reserving";
+  if (phase === "AWAITING_WALLET") return "Awaiting wallet";
+  if (phase === "SUBMITTED") return "Transaction submitted";
+  if (phase === "VERIFYING") return "Verifying finalized deposit";
+  if (phase === "CONFIRMED") return "Entry confirmed";
+  if (phase === "FAILED") return "Failed";
+  if (phase === "EXPIRED") return "Expired";
+  return "";
+}
+
+function explorerTx(signature: string, cluster: string): string {
+  const suffix = cluster === "devnet" || cluster === "testnet" ? `?cluster=${cluster}` : "";
+  return `https://explorer.solana.com/tx/${encodeURIComponent(signature)}${suffix}`;
+}
+
+function escapeText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function publicRpc(cluster: string): string {
+  if (cluster === "devnet") return "https://api.devnet.solana.com";
+  if (cluster === "testnet") return "https://api.testnet.solana.com";
+  if (cluster === "localhost" || cluster === "localnet") return "http://127.0.0.1:8899";
+  throw new Error("Unsupported cluster");
+}
+
+async function loadPublicEscrow(): Promise<void> {
+  const config = await api<{
+    solanaCluster: string;
+    escrowProgramId: string;
+    usdcMint: string;
+    usdcDecimals: number;
+  }>("/v1/config/public");
+  state.publicCluster = config.solanaCluster;
+  state.publicProgramId = config.escrowProgramId;
+  state.publicMint = config.usdcMint;
+  state.publicDecimals = config.usdcDecimals;
+  assertDevCluster(config.solanaCluster);
 }
 
 async function joinContest(matchId: string, contestId: string): Promise<void> {
   if (!state.teamVersionId || state.teamMatchId !== matchId) {
+    state.joinPhase = "FAILED";
     state.joinNote = "Save an XI for this match before reserving a seat.";
     await renderContests(matchId);
     return;
   }
-  state.joinNote = "Creating entry";
+  state.joinPhase = "RESERVING";
+  state.depositPlan = null;
+  state.depositSignature = null;
+  state.joinNote = "Reserving a seat. This is not a deposit and not an entry.";
   await renderContests(matchId);
   try {
-    const reserved = await api<{ payment: string; reservation: { status: string } }>(`/contests/${contestId}/reservations`, {
+    await loadPublicEscrow();
+    const reserved = await api<{
+      payment: string;
+      reservation: { id: string; status: string; expiresAt: string };
+      entry: { status: string };
+      depositPlan: DepositPlan | null;
+    }>(`/contests/${contestId}/reservations`, {
       method: "POST",
       body: JSON.stringify({ teamVersionId: state.teamVersionId }),
     });
-    if (reserved.reservation.status !== "PENDING" || reserved.payment !== "PAYMENT COMING IN PHASE 4") {
-      state.joinNote = "Reservation failed";
+    if (reserved.reservation.status !== "PENDING" || reserved.entry.status !== "PENDING" || reserved.payment !== "PAYMENT COMING IN PHASE 4") {
+      state.joinPhase = "FAILED";
+      state.joinNote = "Reservation failed. Nothing was marked paid.";
+    } else if (!reserved.depositPlan) {
+      state.joinPhase = "FAILED";
+      state.joinNote = "Reservation is pending. USDC mint is not configured, so there is nothing to sign.";
     } else {
-      state.joinNote = "Creating entry. Reservation created. Awaiting wallet payment. PAYMENT COMING IN PHASE 4";
+      state.depositPlan = reserved.depositPlan;
+      state.joinPhase = "AWAITING_WALLET";
+      state.joinNote = "Review the contest, fee, mint, team version, vault, network, and expiry before signing. Transaction submitted is not entry confirmed.";
+      sessionStorage.setItem("kickr.dev.reservation", reserved.reservation.id);
     }
   } catch (error) {
+    state.joinPhase = "FAILED";
     state.joinNote = error instanceof Error ? error.message : "Reservation failed";
   }
   await renderContests(matchId);
+}
+
+async function signDeposit(matchId: string): Promise<void> {
+  const plan = state.depositPlan;
+  const reservationId = sessionStorage.getItem("kickr.dev.reservation");
+  if (!plan || !reservationId) {
+    state.joinPhase = "FAILED";
+    state.joinNote = "No deposit plan. The entry is not confirmed.";
+    await renderContests(matchId);
+    return;
+  }
+  if (Date.parse(plan.expiresAt) <= Date.now()) {
+    state.joinPhase = "EXPIRED";
+    state.joinNote = "The reservation expired before a finalized deposit. This is not an entry.";
+    await renderContests(matchId);
+    return;
+  }
+  state.joinPhase = "AWAITING_WALLET";
+  state.joinNote = "Wallet requested. A signature alone is not a seat.";
+  await renderContests(matchId);
+  try {
+    assertDevCluster(plan.cluster);
+    const connection = new Connection(publicRpc(plan.cluster), "finalized");
+    const payer = await devDepositKeypair();
+    const blockhash = await connection.getLatestBlockhash("finalized");
+    const tx = buildDepositTransaction({
+      plan,
+      feePayer: payer.publicKey,
+      recentBlockhash: blockhash.blockhash,
+    });
+    const signed = await signWithWallet(tx, payer);
+    const signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+    state.depositSignature = signature;
+    state.joinPhase = "SUBMITTED";
+    state.joinNote = "Transaction submitted. Entry is not confirmed.";
+    await renderContests(matchId);
+    await api(`/reservations/${reservationId}/deposit-submission`, {
+      method: "POST",
+      body: JSON.stringify({ signature }),
+    });
+    state.joinPhase = "VERIFYING";
+    state.joinNote = "Verifying the finalized transaction against the reservation. Do not treat this as joined.";
+    await renderContests(matchId);
+    await pollConfirmation(matchId, reservationId);
+  } catch (error) {
+    state.joinPhase = "FAILED";
+    state.joinNote = error instanceof Error ? error.message : "Deposit failed. The entry was not confirmed.";
+    await renderContests(matchId);
+  }
+}
+
+async function pollConfirmation(matchId: string, reservationId: string): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const viewed = await api<{
+      entry: { status: string; depositSignature: string | null };
+      reservation: { status: string; expiresAt: string };
+    }>(`/reservations/${reservationId}`);
+    if (viewed.entry.status === "CONFIRMED" && viewed.reservation.status === "CONFIRMED") {
+      state.joinPhase = "CONFIRMED";
+      state.joinNote = "Entry confirmed after backend verification of a finalized deposit.";
+      await renderContests(matchId);
+      return;
+    }
+    if (Date.parse(viewed.reservation.expiresAt) <= Date.now() && viewed.entry.status !== "CONFIRMED") {
+      state.joinPhase = "EXPIRED";
+      state.joinNote = "Reservation expired before confirmation. The entry is not confirmed.";
+      await renderContests(matchId);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  state.joinPhase = "VERIFYING";
+  state.joinNote = "Transaction submitted. Still waiting for a finalized match. Entry is not confirmed.";
+  await renderContests(matchId);
+}
+
+async function signWithWallet(tx: Transaction, fallback: Keypair): Promise<Transaction> {
+  const provider = (window as Window & { solana?: { signTransaction?: (tx: Transaction) => Promise<Transaction> } }).solana;
+  if (provider?.signTransaction) {
+    return provider.signTransaction(tx);
+  }
+  tx.sign(fallback);
+  return tx;
+}
+
+async function devDepositKeypair(): Promise<Keypair> {
+  const existing = sessionStorage.getItem("kickr.dev.depositSecret");
+  if (existing) {
+    return Keypair.fromSecretKey(bs58.decode(existing));
+  }
+  const created = Keypair.generate();
+  sessionStorage.setItem("kickr.dev.depositSecret", bs58.encode(created.secretKey));
+  sessionStorage.setItem("kickr.dev.depositSecretLabel", "throwaway browser devnet signer, not a committed key");
+  return created;
 }
 
 async function renderDetail(id: string): Promise<void> {

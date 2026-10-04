@@ -184,7 +184,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   registerFootballRoutes(app, deps, (c) => authenticate(deps, c));
-  registerContestRoutes(app, deps, (c) => authenticate(deps, c));
+  registerContestRoutes(app, deps, (c) => authenticate(deps, c), (c, permission) => requirePermission(deps, c, permission));
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));

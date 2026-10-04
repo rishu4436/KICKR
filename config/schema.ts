@@ -1,4 +1,6 @@
+import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
+import { assertDevCluster, DEFAULT_ESCROW_PROGRAM_ID, FORBIDDEN_MAINNET_USDC_MINT } from "../solana/ids.js";
 
 /**
  * Env schema. Required keys fail validation when missing or blank.
@@ -44,8 +46,37 @@ export const envSchema = z.object({
   SESSION_TTL_SECONDS: intOrDefault(86_400),
   AUTH_RATE_LIMIT_MAX: intOrDefault(30),
   AUTH_RATE_LIMIT_WINDOW_SECONDS: intOrDefault(60),
-  SOLANA_CLUSTER: stringOrDefault("devnet"),
+  SOLANA_CLUSTER: stringOrDefault("devnet").refine((value) => {
+    try {
+      assertDevCluster(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "KICKR escrow refuses mainnet. Use devnet, localnet, localhost, or testnet."),
   SOLANA_RPC_URL: stringOrDefault("https://api.devnet.solana.com"),
+  ESCROW_PROGRAM_ID: stringOrDefault(DEFAULT_ESCROW_PROGRAM_ID),
+  USDC_MINT: z.preprocess(
+    (value) => (value === undefined || value === "" ? "" : value),
+    z.string().refine((value) => {
+      if (value === "") {
+        return true;
+      }
+      if (value === FORBIDDEN_MAINNET_USDC_MINT) {
+        return false;
+      }
+      try {
+        void new PublicKey(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "USDC_MINT must be blank or a configured devnet mint. The mainnet USDC mint is refused."),
+  ),
+  USDC_DECIMALS: z.preprocess(
+    (value) => (value === undefined || value === "" ? 6 : value),
+    z.coerce.number().int().min(0).max(9),
+  ),
   SPORTS_DATA_PROVIDER: stringOrDefault("unset"),
   // TODO: 100 is a development default, not a confirmed production credit cap.
   FANTASY_CREDIT_CAP: intOrDefault(100),

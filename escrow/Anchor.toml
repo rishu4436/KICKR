@@ -1,0 +1,24 @@
+skip_local_validator = true
+
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+kickr_escrow = "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN"
+
+[programs.devnet]
+kickr_escrow = "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+# LiteSVM 0.10 rejects the default SBF v3 ELF (InvalidAccountData).
+# Rebuild v0 before the tests. anchor test still compiles v3 first.
+test = "cargo-build-sbf --arch v0 --manifest-path programs/kickr_escrow/Cargo.toml && cargo test --manifest-path programs/kickr_escrow/Cargo.toml"
+
+[hooks]

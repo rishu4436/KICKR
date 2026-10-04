@@ -84,6 +84,10 @@ export interface ContestRecord {
   updatedAt: string;
   lockedAt: string | null;
   completedAt: string | null;
+  confirmedCount: number;
+  escrowPda: string | null;
+  vaultAddress: string | null;
+  usdcMint: string | null;
 }
 
 /**
@@ -114,6 +118,10 @@ export interface ReservationRecord {
   issuedAt: string;
   expiresAt: string;
   status: ReservationStatus;
+  nonceHash: string;
+  depositSignature: string | null;
+  submittedAt: string | null;
+  confirmationStatus: "NONE" | "SUBMITTED" | "VERIFIED" | "REJECTED";
   createdAt: string;
   updatedAt: string;
 }
@@ -127,6 +135,14 @@ export interface EntryRecord {
   status: EntryStatus;
   seatNumber: number;
   joinedAt: string;
+  confirmationStatus: "PENDING" | "CONFIRMED" | "REJECTED";
+  depositSignature: string | null;
+  confirmedSlot: number | null;
+  confirmedBlockTime: string | null;
+  chainAmountBaseUnits: number | null;
+  mint: string | null;
+  vaultAddress: string | null;
+  depositReceipt: string | null;
   createdAt: string;
   updatedAt: string;
 }

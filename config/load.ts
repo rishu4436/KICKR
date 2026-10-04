@@ -21,6 +21,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     environment: data.NODE_ENV,
     authDomain: data.AUTH_DOMAIN,
     solanaCluster: data.SOLANA_CLUSTER,
+    escrowProgramId: data.ESCROW_PROGRAM_ID,
+    usdcMint: data.USDC_MINT,
+    usdcDecimals: data.USDC_DECIMALS,
     sportsDataProvider: data.SPORTS_DATA_PROVIDER,
   };
 
@@ -43,6 +46,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
       solana: {
         cluster: data.SOLANA_CLUSTER,
+        escrowProgramId: data.ESCROW_PROGRAM_ID,
+        usdcMint: data.USDC_MINT,
+        usdcDecimals: data.USDC_DECIMALS,
       },
       sportsData: {
         provider: data.SPORTS_DATA_PROVIDER,

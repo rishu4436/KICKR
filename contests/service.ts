@@ -6,6 +6,8 @@ import type { ContestDiscoveryCache } from "./discovery.js";
 import type { ContestStore } from "./store.js";
 import type { ContestLimits, ContestRecord, DiscoveryView, EntryRecord, ReservationRecord } from "./types.js";
 import { assertBaseUnits } from "./types.js";
+import { buildDepositPlan, type DepositPlan, type EscrowClientConfig } from "../solana/escrow.js";
+import { assertDevCluster, DEFAULT_ESCROW_PROGRAM_ID } from "../solana/ids.js";
 
 export interface QuoteView {
   contestId: string;
@@ -25,6 +27,8 @@ export interface ReservationView {
   quote: QuoteView;
   contest: DiscoveryView;
   payment: "PAYMENT COMING IN PHASE 4";
+  /** Null until USDC_MINT is configured. A plan is not a payment and not a confirmation. */
+  depositPlan: DepositPlan | null;
 }
 
 const JOINABLE = new Set(["OPEN", "PARTIALLY_FILLED"]);
@@ -79,7 +83,15 @@ export class ContestService {
     private readonly audit: AuditStore,
     private readonly cache: ContestDiscoveryCache,
     private readonly limits: ContestLimits & { reservationTtlSeconds: number },
-  ) {}
+    private readonly escrow: EscrowClientConfig = {
+      programId: DEFAULT_ESCROW_PROGRAM_ID,
+      usdcMint: "",
+      usdcDecimals: 6,
+      cluster: "devnet",
+    },
+  ) {
+    assertDevCluster(this.escrow.cluster);
+  }
 
   async listDiscoverable(matchId: string, ctx: RequestContext): Promise<DiscoveryView[]> {
     const match = await this.football.getMatch(matchId);
@@ -227,7 +239,56 @@ export class ContestService {
       quote: quoteOf(result.reservation),
       contest: discoveryOf(result.contest),
       payment: "PAYMENT COMING IN PHASE 4",
+      depositPlan: this.planFor(result.reservation),
     };
+  }
+
+  /**
+   * Records that the user submitted a signature. This does not confirm the
+   * entry, does not move USDC, and does not emit ENTRY_CONFIRMED.
+   */
+  async submitDepositSignature(
+    reservationId: string,
+    wallet: string,
+    signature: string,
+    ctx: RequestContext,
+  ): Promise<ReservationView> {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(signature)) {
+      throw new AppError("VALIDATION", 400, "Signature is not a Solana transaction signature");
+    }
+    const current = await this.store.getReservation(reservationId, ctx.now);
+    if (!current || current.wallet !== wallet) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    const reservation = await this.store.submitDeposit(reservationId, signature, ctx.now);
+    await this.audit.append({
+      action: "DEPOSIT_SUBMITTED",
+      occurredAt: ctx.now,
+      entityType: "ENTRY",
+      entityId: reservationId,
+      metadata: {
+        signature,
+        contestId: reservation.contestId,
+        confirmed: false,
+        commitment: "submitted",
+      },
+      actorAccountId: null,
+      actorWallet: wallet,
+      correlationId: ctx.correlationId,
+    });
+    return this.viewReservation(reservation, ctx);
+  }
+
+  async listDeposits(contestId: string): Promise<EntryRecord[]> {
+    const contest = await this.store.getContest(contestId);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return this.store.listEntries(contestId);
+  }
+
+  async depositHealth() {
+    return this.store.depositHealth();
   }
 
   async getReservation(id: string, wallet: string, ctx: RequestContext): Promise<ReservationView> {
@@ -247,12 +308,14 @@ export class ContestService {
       quote: quoteOf(reservation),
       contest: discoveryOf(contest),
       payment: "PAYMENT COMING IN PHASE 4",
+      depositPlan: this.planFor(reservation),
     };
   }
 
   /**
-   * Phase 3 cannot confirm a reservation. CONFIRMED is reserved for Phase 4
-   * after on-chain verification. This method never writes that status.
+   * Support and the join route cannot confirm a reservation. The indexer is
+   * the only caller of confirmVerifiedDeposit, and only after finalized
+   * verification. This method still refuses.
    */
   async rejectConfirmation(id: string, ctx: RequestContext): Promise<never> {
     const reservation = await this.store.getReservation(id, ctx.now);
@@ -329,6 +392,38 @@ export class ContestService {
       ids.push(...locked.map((contest) => contest.id));
     }
     return ids;
+  }
+
+  private planFor(reservation: ReservationRecord): DepositPlan | null {
+    if (!this.escrow.usdcMint) {
+      return null;
+    }
+    return buildDepositPlan({
+      config: this.escrow,
+      contestId: reservation.contestId,
+      wallet: reservation.wallet,
+      teamVersionId: reservation.teamVersionId,
+      reservationNonce: reservation.nonce,
+      feeBaseUnits: reservation.amountBaseUnits,
+      expiresAt: reservation.expiresAt,
+    });
+  }
+
+  private async viewReservation(reservation: ReservationRecord, _ctx: RequestContext): Promise<ReservationView> {
+    const entries = await this.store.listEntries(reservation.contestId);
+    const entry = entries.find((row) => row.reservationId === reservation.id);
+    const contest = await this.store.getContest(reservation.contestId);
+    if (!entry || !contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return {
+      reservation,
+      entry,
+      quote: quoteOf(reservation),
+      contest: discoveryOf(contest),
+      payment: "PAYMENT COMING IN PHASE 4",
+      depositPlan: this.planFor(reservation),
+    };
   }
 
   private async ensureEnabled(matchId: string, lockTime: string, ctx: RequestContext): Promise<boolean> {

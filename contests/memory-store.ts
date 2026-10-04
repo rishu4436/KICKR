@@ -3,7 +3,7 @@ import type { ContestState } from "../domain/state-machine.js";
 import { newId, newNonce } from "../shared/ids.js";
 import { AppError } from "../shared/errors.js";
 import { DEV_FEE_POLICY, DEV_PAYOUT_POLICIES, DEV_SCORING_SNAPSHOT, DEV_TEMPLATES } from "./dev-catalog.js";
-import type { ContestStore, EnsureResult, ReserveResult, ReserveSeatInput } from "./store.js";
+import type { ConfirmDepositInput, ConfirmDepositResult, ContestStore, DepositHealth, EnsureResult, ReserveResult, ReserveSeatInput } from "./store.js";
 import type {
   ContestLimits,
   ContestRecord,
@@ -16,6 +16,7 @@ import type {
   RulesSnapshot,
 } from "./types.js";
 import { assertBaseUnits, ESCROW_PLACEHOLDER } from "./types.js";
+import { nonceHash, toHex } from "../solana/escrow.js";
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -41,6 +42,9 @@ export class InMemoryContestStore implements ContestStore {
   private reservations: ReservationRecord[] = [];
   private entries: EntryRecord[] = [];
   private outbox: OutboxRecord[] = [];
+  private rejections: Array<{ signature: string; reason: string; reservationId: string | null }> = [];
+  /** Test hook. Production callers leave this at zero. */
+  debugFailConfirmations = 0;
   private tail: Promise<void> = Promise.resolve();
 
   constructor() {
@@ -143,6 +147,7 @@ export class InMemoryContestStore implements ContestStore {
       contest.updatedAt = nowIso;
 
       const expires = new Date(input.now.getTime() + input.ttlSeconds * 1000);
+      const nonce = newNonce();
       const reservation: ReservationRecord = {
         id: newId(),
         contestId: contest.id,
@@ -150,11 +155,15 @@ export class InMemoryContestStore implements ContestStore {
         teamVersionId: input.teamVersionId,
         amountBaseUnits: contest.entryFeeBaseUnits,
         currency: "USDC",
-        nonce: newNonce(),
+        nonce,
         escrowPlaceholder: { ...ESCROW_PLACEHOLDER },
         issuedAt: nowIso,
         expiresAt: expires.toISOString(),
         status: "PENDING",
+        nonceHash: toHex(nonceHash(nonce)),
+        depositSignature: null,
+        submittedAt: null,
+        confirmationStatus: "NONE",
         createdAt: nowIso,
         updatedAt: nowIso,
       };
@@ -168,6 +177,14 @@ export class InMemoryContestStore implements ContestStore {
         status: "PENDING",
         seatNumber,
         joinedAt: nowIso,
+        confirmationStatus: "PENDING",
+        depositSignature: null,
+        confirmedSlot: null,
+        confirmedBlockTime: null,
+        chainAmountBaseUnits: null,
+        mint: null,
+        vaultAddress: null,
+        depositReceipt: null,
         createdAt: nowIso,
         updatedAt: nowIso,
       };
@@ -280,6 +297,129 @@ export class InMemoryContestStore implements ContestStore {
     });
   }
 
+
+  async findReservationByNonceHash(hash: string): Promise<ReservationRecord | null> {
+    return this.exclusive(() => {
+      const row = this.reservations.find((reservation) => reservation.nonceHash === hash);
+      return row ? clone(row) : null;
+    });
+  }
+
+  async submitDeposit(reservationId: string, signature: string, now: Date): Promise<ReservationRecord> {
+    return this.exclusive(() => {
+      const row = this.reservations.find((reservation) => reservation.id === reservationId);
+      if (!row) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      if (row.status === "CONFIRMED" || row.confirmationStatus === "VERIFIED") {
+        throw new AppError("ALREADY_CONFIRMED", 409, "Reservation is already confirmed");
+      }
+      if (row.status !== "PENDING") {
+        throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+      }
+      if (Date.parse(row.expiresAt) <= now.getTime()) {
+        row.status = "EXPIRED";
+        row.updatedAt = now.toISOString();
+        throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+      }
+      row.depositSignature = signature;
+      row.submittedAt = now.toISOString();
+      row.confirmationStatus = "SUBMITTED";
+      row.updatedAt = row.submittedAt;
+      return clone(row);
+    });
+  }
+
+  async confirmVerifiedDeposit(input: ConfirmDepositInput): Promise<ConfirmDepositResult> {
+    return this.exclusive(() => {
+      if (this.debugFailConfirmations > 0) {
+        this.debugFailConfirmations -= 1;
+        throw new Error("db write failed");
+      }
+      const reservation = this.reservations.find((row) => row.id === input.reservationId);
+      const entry = this.entries.find((row) => row.reservationId === input.reservationId);
+      const contest = reservation ? this.contests.find((row) => row.id === reservation.contestId) : undefined;
+      if (!reservation || !entry || !contest) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      if (entry.teamVersionId !== input.teamVersionId) {
+        throw new AppError("TEAM_VERSION_MISMATCH", 409, "Entry team version does not match the deposit");
+      }
+      if (entry.status === "CONFIRMED" && entry.depositSignature === input.signature) {
+        return { contest: clone(contest), reservation: clone(reservation), entry: clone(entry), idempotent: true };
+      }
+      if (entry.status !== "PENDING" || reservation.status === "CONFIRMED") {
+        throw new AppError("DUPLICATE", 409, "Deposit already recorded");
+      }
+      const nowIso = input.now.toISOString();
+      entry.status = transition("ENTRY", entry.status, "CONFIRMED") as EntryRecord["status"];
+      entry.confirmationStatus = "CONFIRMED";
+      entry.depositSignature = input.signature;
+      entry.confirmedSlot = input.slot;
+      entry.confirmedBlockTime = input.blockTime === null ? null : new Date(input.blockTime * 1000).toISOString();
+      entry.chainAmountBaseUnits = input.amountBaseUnits;
+      entry.mint = input.mint;
+      entry.vaultAddress = input.vault;
+      entry.depositReceipt = input.depositReceipt;
+      entry.updatedAt = nowIso;
+      reservation.status = "CONFIRMED";
+      reservation.confirmationStatus = "VERIFIED";
+      reservation.depositSignature = input.signature;
+      reservation.updatedAt = nowIso;
+      contest.confirmedCount += 1;
+      contest.escrowPda = input.contestPda;
+      contest.vaultAddress = input.vault;
+      contest.usdcMint = input.mint;
+      contest.updatedAt = nowIso;
+      if (
+        contest.contestType === "HEAD_TO_HEAD" &&
+        contest.confirmedCount === contest.capacity &&
+        !this.outbox.some((row) => row.contestId === contest.id && row.eventType === "CONTEST_FILLED")
+      ) {
+        this.outbox.push({
+          id: newId(),
+          eventType: "CONTEST_FILLED",
+          contestId: contest.id,
+          payload: { matchId: contest.matchId, templateId: contest.templateId, confirmed: true },
+          createdAt: nowIso,
+          publishedAt: null,
+        });
+        const template = this.templates.find((row) => row.id === contest.templateId);
+        if (template && !this.findCurrent(contest.matchId, template)) {
+          this.insertContest(template, contest.matchId, contest.rulesSnapshot.lockTime, input.now);
+        }
+      }
+      return { contest: clone(contest), reservation: clone(reservation), entry: clone(entry), idempotent: false };
+    });
+  }
+
+  async recordRejection(input: { signature: string; reason: string; reservationId: string | null }): Promise<void> {
+    await this.exclusive(() => {
+      if (this.rejections.some((row) => row.signature === input.signature && row.reason === input.reason)) {
+        return;
+      }
+      this.rejections.push(input);
+      if (input.reservationId) {
+        const reservation = this.reservations.find((row) => row.id === input.reservationId);
+        if (reservation && reservation.confirmationStatus !== "VERIFIED") {
+          reservation.confirmationStatus = "REJECTED";
+          reservation.depositSignature = input.signature;
+        }
+      }
+    });
+  }
+
+  async depositHealth(): Promise<DepositHealth> {
+    return this.exclusive(() => ({
+      pendingReservations: this.reservations.filter((row) => row.status === "PENDING").length,
+      pendingEntries: this.entries.filter((row) => row.status === "PENDING").length,
+      submittedDeposits: this.reservations.filter((row) => row.confirmationStatus === "SUBMITTED").length,
+      rejectedDeposits: this.rejections.length,
+      verifiedDeposits: this.entries.filter((row) => row.status === "CONFIRMED").length,
+      reconciliationMismatches: this.rejections.length,
+    }));
+  }
+
   private requireTemplate(id: string): ContestTemplateRecord {
     const template = this.templates.find((row) => row.id === id);
     if (!template || !template.enabled) {
@@ -323,6 +463,10 @@ export class InMemoryContestStore implements ContestStore {
       updatedAt: nowIso,
       lockedAt: null,
       completedAt: null,
+      confirmedCount: 0,
+      escrowPda: null,
+      vaultAddress: null,
+      usdcMint: null,
     };
     this.contests.push(contest);
     return contest;

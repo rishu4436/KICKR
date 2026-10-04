@@ -2,11 +2,11 @@
 
 ## Authority
 
-Postgres is authoritative for accounts, sessions, RBAC assignments, and audit. Redis is not authoritative for financial state. The Solana escrow program does **not** exist in Phase 1.
+Postgres is authoritative for accounts, sessions, RBAC assignments, reservations, entries, and audit. Redis is not authoritative for financial state. Phase 4 adds a devnet deposit program. Solana is authoritative for the deposit and the on-chain capacity counter. The program is not audited.
 
 USDC leaves a contest escrow only through a program instruction whose inputs were already written to the entry table and the approved snapshot. The backend decides the list. The program makes the list true. Support can show both records. Support cannot replace either one.
 
-Future escrow must never depend on a backend private key that can arbitrarily move the contest pot. Phase 1 does not define, load, or store such a key. Do not add one.
+The contest vault has no private key. Init authority can create config and contests and cannot withdraw. Do not add a backend key that can arbitrarily move the pot.
 
 ## Where authentication happens
 
@@ -36,7 +36,7 @@ Private keys and seed phrases are not accepted and are not stored.
 
 After a session is accepted, `rbac/authorize.ts` unions permissions from `account_roles` and `account_capability_grants`. Routes call that check. There is no permission that means "everything".
 
-`INDEXER_CONFIRM_ENTRY` is not in the permission catalog and is not grantable to any human role. Entry confirmation is reserved for a future program/indexer path.
+`INDEXER_CONFIRM_ENTRY` is not in the permission catalog and is not grantable to any human role. The Phase 4 indexer confirms in process after finalized verification. Support cannot call that path.
 
 No permission can move escrow. `RUN_SCORING` does not touch escrow. `RUN_SETTLEMENT` is not granted to any human role.
 
@@ -77,3 +77,24 @@ Append-only in the API (`updateAuditEvent` / `deleteAuditEvent` always throw) an
 - Audit: no delete.
 - Roles and permissions: reference data, no delete API.
 - Role assignment has no HTTP writer in Phase 1.
+
+## Phase 4 deposit checklist
+
+Not an audit. Upgrade authority on a deploy is not a formal audit.
+
+- No generic transfer, `withdraw_all`, `admin_transfer`, `arbitrary_transfer`, or sweep.
+- `deposit` destination is the contest vault ATA. The user is the signer and the transfer authority. There is no arbitrary destination.
+- No vault key. The contest PDA would be the only future spender, and this phase has no instruction that signs for it.
+- Account, mint, and token-program substitution is constrained to the contest account's mint and token program.
+- Duplicate depositor and replay fail because the receipt PDA already exists. The count does not increase and tokens do not move.
+- The deposit count uses `checked_add`. Amounts are `u64` base units. Decimals come from the mint passed to `transfer_checked`.
+- PDA seeds are fixed: `config`, `contest` + 16-byte id, `deposit` + contest PDA + wallet. The vault is an ATA, not a second PDA with the same seeds.
+- Capacity and lock are enforced in the program from account state and `Clock`, not from the backend.
+- The user account is `Signer`. A missing signature fails the transaction.
+- The token CPI uses the token program account on the instruction. A substituted program fails the contest's token-program constraint.
+- A stale quote fails indexer expiry against the reservation. The program itself enforces `lock_at`, not the quote expiry. Quote expiry is an off-chain confirmation rule.
+- A click, a reservation, a signature alone, or a raw vault transfer is not `ENTRY_CONFIRMED`.
+- `DEPOSIT_VERIFIED` and `ENTRY_CONFIRMED` are appended only after commitment `finalized`.
+- No employee permission moves funds. There is no `ARBITRARY_ESCROW_TRANSFER` or `MANUAL_WITHDRAWAL`.
+
+Refund is not implemented. Shipping a refund that can pick a recipient would let an operator drain valid contest funds.

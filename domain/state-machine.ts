@@ -135,11 +135,13 @@ export const ENTRY_STATES = ["PENDING", "CONFIRMED", "REFUNDED", "CANCELLED"] as
 export type EntryState = (typeof ENTRY_STATES)[number];
 
 /**
- * Phase 3 does not confirm an entry. PENDING → CONFIRMED is not legal until
- * Phase 4 adds it after on-chain verification. REFUNDED stays unreachable.
+ * PENDING → CONFIRMED is legal only for the Phase 4 indexer after a
+ * finalized deposit matches the reservation. Join must not call it.
+ * REFUNDED stays unreachable. No refund instruction moves USDC in Phase 4.
  */
 export const ENTRY_TRANSITIONS: ReadonlyArray<readonly [EntryState, EntryState]> = [
   ["PENDING", "CANCELLED"],
+  ["PENDING", "CONFIRMED"],
 ];
 
 const TRANSITIONS: Record<EntityName, ReadonlyArray<readonly [string, string]>> = {

@@ -86,7 +86,8 @@ describe("contest engine", () => {
     }
     expect(current).toBe("SETTLED");
     expect(() => transition("CONTEST", "OPEN", "REFUNDED")).toThrow(AppError);
-    expect(() => transition("ENTRY", "PENDING", "CONFIRMED")).toThrow(AppError);
+    expect(transition("ENTRY", "PENDING", "CONFIRMED")).toBe("CONFIRMED");
+    expect(() => transition("ENTRY", "DRAFT", "CONFIRMED")).toThrow(AppError);
   });
 
   it("rotates an H2H room when the last seat is reserved", async () => {
