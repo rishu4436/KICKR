@@ -7,9 +7,12 @@ import { assertDevCluster } from "../../solana/ids.js";
 import type { ClaimPlan } from "../../solana/escrow.js";
 import {
   explorerClaimUrl,
+  loginWithBrowserWallet,
   publicRpcForCluster,
   readBrowserWallet,
+  shortWallet,
   signAndSubmitClaim,
+  assertWalletClaimInvariant,
 } from "./claim-flow.js";
 
 Object.assign(globalThis, { Buffer });
@@ -56,6 +59,8 @@ const app: HTMLElement = root;
 
 const state: {
   token: string | null;
+  authMode: "dev" | "wallet" | null;
+  walletAddress: string | null;
   bucket: "upcoming" | "live" | "completed";
   creditCap: number;
   maxPlayersFromOneTeam: number | null;
@@ -71,7 +76,9 @@ const state: {
   publicMint: string;
   publicDecimals: number;
 } = {
-  token: sessionStorage.getItem("kickr.dev.token"),
+  token: sessionStorage.getItem("kickr.session.token") ?? sessionStorage.getItem("kickr.dev.token"),
+  authMode: (sessionStorage.getItem("kickr.auth.mode") as "dev" | "wallet" | null) ?? (sessionStorage.getItem("kickr.dev.token") ? "dev" : null),
+  walletAddress: sessionStorage.getItem("kickr.auth.wallet"),
   bucket: "upcoming",
   creditCap: 100,
   maxPlayersFromOneTeam: null,
@@ -109,7 +116,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-async function signIn(): Promise<void> {
+function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
+  state.token = input.token;
+  state.authMode = input.mode;
+  state.walletAddress = input.walletAddress;
+  sessionStorage.setItem("kickr.session.token", input.token);
+  sessionStorage.setItem("kickr.auth.mode", input.mode);
+  sessionStorage.setItem("kickr.auth.wallet", input.walletAddress);
+  if (input.mode === "dev") {
+    sessionStorage.setItem("kickr.dev.token", input.token);
+  } else {
+    sessionStorage.removeItem("kickr.dev.token");
+  }
+}
+
+/** Development signer path — keeps nacl.sign.keyPair() for local testing only. */
+async function signInDevelopment(): Promise<void> {
   const pair = nacl.sign.keyPair();
   const walletAddress = bs58.encode(pair.publicKey);
   const nonce = await api<{ message: string }>("/v1/auth/nonce", {
@@ -117,17 +139,49 @@ async function signIn(): Promise<void> {
     body: JSON.stringify({ walletAddress }),
   });
   const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(nonce.message), pair.secretKey));
-  const session = await api<{ token: string }>("/v1/auth/login", {
+  const session = await api<{ token: string; account: { walletAddress: string } }>("/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ walletAddress, message: nonce.message, signature }),
   });
-  state.token = session.token;
-  sessionStorage.setItem("kickr.dev.token", session.token);
+  persistSession({ token: session.token, mode: "dev", walletAddress: session.account.walletAddress });
+}
+
+/** Real browser wallet auth via existing /v1/auth/nonce + /v1/auth/login. */
+async function signInWithWallet(): Promise<void> {
+  const wallet = readBrowserWallet();
+  if (!wallet) {
+    throw new Error("No Phantom/Solflare provider found. Install a wallet extension and try again.");
+  }
+  const result = await loginWithBrowserWallet({
+    wallet,
+    requestNonce: async (walletAddress) =>
+      api<{ message: string }>("/v1/auth/nonce", {
+        method: "POST",
+        body: JSON.stringify({ walletAddress }),
+      }),
+    requestLogin: async (body) =>
+      api<{ token: string; account: { walletAddress: string } }>("/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+  persistSession({ token: result.token, mode: "wallet", walletAddress: result.walletAddress });
+}
+
+function headerAuthLabel(): string {
+  if (!state.token) return "";
+  if (state.authMode === "wallet" && state.walletAddress) {
+    return `Wallet connected · ${shortWallet(state.walletAddress)} · Devnet`;
+  }
+  if (state.authMode === "dev") {
+    return "Development signer";
+  }
+  return "Signed in";
 }
 
 function shell(title: string, body: string): string {
   return `<div class="shell">
-    <div class="top"><div class="brand">KICKR</div><div class="quiet">${state.token ? "Development signer" : ""}</div></div>
+    <div class="top"><div class="brand">KICKR</div><div class="quiet">${escapeText(headerAuthLabel())}</div></div>
     <h1>${title}</h1>
     ${body}
     <p class="note">Credits are a squad budget, not USDC. A reservation is not a seat. Entry confirmed appears only after the backend verifies a finalized deposit. Development matches are not a live feed.</p>
@@ -141,9 +195,26 @@ function kickoffLabel(iso: string): string {
 async function render(): Promise<void> {
   const hash = route();
   if (!state.token) {
-    app.innerHTML = shell("Build an XI.", `<p class="quiet">Sign in with a development key to open matches. This is not a production wallet.</p><button class="primary" id="signin">Sign in</button>`);
-    document.querySelector("#signin")?.addEventListener("click", () => {
-      void signIn().then(render);
+    app.innerHTML = shell(
+      "Build an XI.",
+      `<p class="quiet">Connect Phantom/Solflare for real claims, or use a development signer for local testing.</p>
+       <div class="row">
+         <button class="primary" id="signin-wallet">Connect wallet</button>
+         <button class="ghost" id="signin-dev">Sign in (development)</button>
+       </div>
+       <p class="note" id="auth-note"></p>`,
+    );
+    document.querySelector("#signin-dev")?.addEventListener("click", () => {
+      void signInDevelopment().then(render).catch((error) => {
+        const note = document.querySelector("#auth-note");
+        if (note) note.textContent = error instanceof Error ? error.message : "Sign-in failed";
+      });
+    });
+    document.querySelector("#signin-wallet")?.addEventListener("click", () => {
+      void signInWithWallet().then(render).catch((error) => {
+        const note = document.querySelector("#auth-note");
+        if (note) note.textContent = error instanceof Error ? error.message : "Wallet sign-in failed";
+      });
     });
     return;
   }
@@ -829,6 +900,8 @@ async function startClaim(contestId: string, entryId: string, target: Element): 
   target.innerHTML = `<p>wallet_signing… fetching authorized claim plan</p>`;
   try {
     await loadPublicEscrow();
+    const me = await api<{ walletAddress: string }>("/v1/me");
+    state.walletAddress = me.walletAddress;
     const plan = await api<ClaimPlan & { claimUiState?: string; settlementId: string }>(
       `/entries/${entryId}/claim?contestId=${contestId}`,
     );
@@ -842,6 +915,20 @@ async function startClaim(contestId: string, entryId: string, target: Element): 
       target.innerHTML = `<p>failed</p><p class="quiet">No browser wallet connected (Phantom/Solflare). Claim requires your wallet to sign claim_payout — no private keys in the app.</p>`;
       return;
     }
+    let connected = wallet.publicKey;
+    if (!connected) {
+      connected = await wallet.connect();
+    }
+    try {
+      assertWalletClaimInvariant({
+        principalWallet: me.walletAddress,
+        connectedWallet: connected.toBase58(),
+        destinationWallet: plan.destinationWallet,
+      });
+    } catch (error) {
+      target.innerHTML = `<p>wallet_mismatch</p><p class="quiet">${escapeText(error instanceof Error ? error.message : "mismatch")}. No claim proof for another wallet. Not signing.</p>`;
+      return;
+    }
     if (plan.cluster !== state.publicCluster) {
       target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">Plan cluster ${escapeText(plan.cluster)} ≠ app ${escapeText(state.publicCluster)}. Not signing.</p>`;
       return;
@@ -852,7 +939,12 @@ async function startClaim(contestId: string, entryId: string, target: Element): 
       wallet,
       rpcUrl: publicRpcForCluster(plan.cluster),
       appCluster: state.publicCluster,
+      principalWallet: me.walletAddress,
     });
+    if (submitted.uiState === "wallet_mismatch") {
+      target.innerHTML = `<p>wallet_mismatch</p><p class="quiet">${escapeText(submitted.note)}</p>`;
+      return;
+    }
     if (submitted.uiState === "cluster_mismatch") {
       target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">${escapeText(submitted.note)}</p>`;
       return;

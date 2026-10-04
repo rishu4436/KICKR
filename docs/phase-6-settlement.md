@@ -236,3 +236,27 @@ Phase 6 Devnet `1111…1111` remains a **historical protocol fixture**. Phase 6.
 ### Browser Devnet E2E status
 
 **NOT RUN** — no user Phantom/Solflare is connected in this agent box browser. The adapter (`app/src/claim-flow.ts` `readBrowserWallet`) is implemented and covered by UNIT TEST mock providers. Driving `/tmp/kickr-devnet-payer.json` as if it were a browser wallet is explicitly **not** a browser E2E. Phase 6.1.1 acceptance for browser claim remains open until a real connected wallet signs.
+
+## Phase 6.1.2 Browser wallet session for Claim Prize
+
+### Auth
+
+- **Development signer** (kept): ephemeral `nacl.sign.keyPair()` → existing `/v1/auth/nonce` + `/v1/auth/login`. Header shows `Development signer`. Not a connected wallet.
+- **Browser wallet** (new): connect Phantom/Solflare → public key → existing `/v1/auth/nonce` → wallet `signMessage` → existing `/v1/auth/login` → session where `principal.walletAddress` equals the connected pubkey. Header shows `Wallet connected · <short> · Devnet`.
+
+No second auth protocol. Unsigned / invalid signatures are rejected by the existing auth service.
+
+### Claim invariant
+
+`authenticated principal wallet` = `entry destination` = `connected browser wallet` = `claim_payout` fee payer/claimant. On mismatch: no claim for another wallet, no tx, UI shows `wallet_mismatch`.
+
+### Proof classes
+
+| Class | Meaning |
+|---|---|
+| UNIT TEST / LOCAL FIXTURE | Vitest + mock wallet adapters |
+| DEVNET SCRIPT | Payer-key scripts under `/tmp` (e.g. phantom-claimable prepare) |
+| Scripted / wallet claim tx | e.g. `VQzUwc7btnVKiCFFJn5s4fTf7R8UFFtvMp9VrMWLoTTV1GJb4ZveCZsdDya6k2bF5otEXpFMBs6iDKTp4AuBwpS` — **browser wallet claim outside the KICKR Claim Prize button** (not in-app E2E) |
+| DEVNET BROWSER / IN-APP E2E | Claim Prize clicked in the KICKR UI with a real Phantom signature — **still open** until observed |
+
+Do **not** label `VQzU…` as in-app E2E.
