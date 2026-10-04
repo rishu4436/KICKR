@@ -16,6 +16,7 @@ import type {
   MatchRecord,
   PlayerRecord,
   SquadRecord,
+  StoredMatchEvent,
 } from "./store.js";
 
 export interface MatchView {
@@ -72,6 +73,15 @@ export class FootballService {
       return null;
     }
     return this.toMatchView(match);
+  }
+
+  /** Append-only stored events. Does not score and does not mutate. */
+  async listStoredEvents(matchId: string): Promise<StoredMatchEvent[] | null> {
+    const match = await this.store.getMatch(matchId);
+    if (!match) {
+      return null;
+    }
+    return this.store.listEvents(matchId);
   }
 
   async getSquad(matchId: string): Promise<SquadRecord[] | null> {

@@ -248,6 +248,10 @@ export class InMemoryContestStore implements ContestStore {
     );
   }
 
+  async listContests(): Promise<ContestRecord[]> {
+    return this.exclusive(() => this.contests.map((contest) => clone(contest)));
+  }
+
   async listEntries(contestId: string): Promise<EntryRecord[]> {
     return this.exclusive(() =>
       this.entries.filter((entry) => entry.contestId === contestId).map((entry) => clone(entry)),

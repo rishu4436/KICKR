@@ -313,6 +313,18 @@ export function createPgSettlementStore(db: Queryable): SettlementStore {
       return row ? resultRowFrom(row) : null;
     },
 
+    async listSettlements() {
+      const result = await db.query<Row>(
+        `SELECT ${SETTLEMENT_COLUMNS} FROM contest_settlements ORDER BY created_at ASC`,
+      );
+      return result.rows.map((row) => settlementFrom(row));
+    },
+    async listAllResultRows() {
+      const result = await db.query<Row>(
+        `SELECT ${ROW_COLUMNS} FROM settlement_result_rows ORDER BY created_at ASC`,
+      );
+      return result.rows.map((row) => resultRowFrom(row));
+    },
     async hasConfirmedSettlement(contestId) {
       const result = await db.query(
         `SELECT 1 FROM contest_settlements

@@ -19,6 +19,7 @@ import { registerFootballRoutes } from "./football.js";
 import { registerContestRoutes } from "./contests.js";
 import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
+import { registerOpsRoutes } from "./ops.js";
 import type { LiveScoringService } from "../live/service.js";
 import type { SettlementService } from "../settlement/service.js";
 import type { SettlementOrchestrator } from "../settlement/orchestrator.js";
@@ -219,10 +220,13 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     (c) => authenticate(deps, c),
     (c, permission) => requirePermission(deps, c, permission),
   );
+  registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));
     app.get("/", serveStatic({ root: deps.clientDir, path: "index.html" }));
+    app.get("/ops", serveStatic({ root: deps.clientDir, path: "ops.html" }));
+    app.get("/ops/", serveStatic({ root: deps.clientDir, path: "ops.html" }));
   }
 
   return app;

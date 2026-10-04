@@ -11,6 +11,8 @@ export interface SettlementStore {
   updateRow(row: SettlementResultRow): Promise<void>;
   getRowByEntry(settlementId: string, entryId: string): Promise<SettlementResultRow | null>;
   hasConfirmedSettlement(contestId: string): Promise<boolean>;
+  listSettlements(): Promise<SettlementRecord[]>;
+  listAllResultRows(): Promise<SettlementResultRow[]>;
 }
 
 export class InMemorySettlementStore implements SettlementStore {
@@ -108,6 +110,14 @@ export class InMemorySettlementStore implements SettlementStore {
       (item) => item.settlementId === settlementId && item.entryId === entryId,
     );
     return row ? structuredClone(row) : null;
+  }
+
+  async listSettlements(): Promise<SettlementRecord[]> {
+    return [...this.settlements.values()].map((row) => structuredClone(row));
+  }
+
+  async listAllResultRows(): Promise<SettlementResultRow[]> {
+    return [...this.rows.values()].map((row) => structuredClone(row));
   }
 
   async hasConfirmedSettlement(contestId: string): Promise<boolean> {

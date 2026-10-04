@@ -127,6 +127,14 @@ export class ContestService {
     return merged;
   }
 
+  async listAllContests(): Promise<ContestRecord[]> {
+    return this.store.listContests();
+  }
+
+  async findEntry(entryId: string): Promise<EntryRecord | null> {
+    return this.store.getEntry(entryId);
+  }
+
   async getContest(id: string): Promise<DiscoveryView> {
     const contest = await this.store.getContest(id);
     if (!contest) {

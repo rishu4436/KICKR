@@ -1,3 +1,5 @@
+import type { AuditQuery } from "../audit/query.js";
+import { matchesAuditQuery } from "../audit/query.js";
 import type { AuditEvent, AuditEventInput, AuditStore } from "../audit/types.js";
 import { parseAuditEventInput } from "../audit/validate.js";
 import type {
@@ -102,6 +104,24 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
       }
       return mapAccount(found);
     },
+    async listAll(): Promise<AccountRecord[]> {
+      const result = await db.query<Row>(
+        `SELECT id, wallet_address, created_at, updated_at, deleted_at
+         FROM accounts
+         ORDER BY created_at ASC, id ASC`,
+      );
+      return result.rows.map((row) => mapAccount(row));
+    },
+    async suspend(id: string, now: Date): Promise<boolean> {
+      const result = await db.query(
+        `UPDATE accounts
+         SET deleted_at = $2
+         WHERE id = $1
+           AND deleted_at IS NULL`,
+        [id, now],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
   };
 }
 
@@ -175,6 +195,24 @@ export function createPgSessionRepository(db: Queryable): SessionRepository {
       const row = result.rows[0];
       return row ? mapSession(row) : null;
     },
+    async findById(sessionId: string): Promise<SessionRecord | null> {
+      const result = await db.query<Row>(
+        `SELECT id, account_id, token_hash, created_at, updated_at, expires_at, revoked_at
+         FROM sessions WHERE id = $1`,
+        [sessionId],
+      );
+      const row = result.rows[0];
+      return row ? mapSession(row) : null;
+    },
+    async listByAccount(accountId: string): Promise<SessionRecord[]> {
+      const result = await db.query<Row>(
+        `SELECT id, account_id, token_hash, created_at, updated_at, expires_at, revoked_at
+         FROM sessions WHERE account_id = $1
+         ORDER BY created_at ASC`,
+        [accountId],
+      );
+      return result.rows.map((row) => mapSession(row));
+    },
     async revoke(sessionId: string, now: Date): Promise<boolean> {
       const result = await db.query(
         `UPDATE sessions
@@ -224,6 +262,36 @@ export function createPgGrantRepository(db: Queryable): GrantRepository {
         }
         return code;
       });
+    },
+    async grantRole(accountId: string, role: RoleCode): Promise<void> {
+      await db.query(
+        `INSERT INTO account_roles (account_id, role_code, created_at, updated_at, granted_by_account_id)
+         VALUES ($1, $2, now(), now(), NULL)
+         ON CONFLICT (account_id, role_code) DO NOTHING`,
+        [accountId, role],
+      );
+    },
+    async revokeRole(accountId: string, role: RoleCode): Promise<boolean> {
+      const result = await db.query(
+        `DELETE FROM account_roles WHERE account_id = $1 AND role_code = $2`,
+        [accountId, role],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+    async grantCapability(accountId: string, capability: CapabilityCode): Promise<void> {
+      await db.query(
+        `INSERT INTO account_capability_grants (account_id, capability, created_at, updated_at, granted_by_account_id)
+         VALUES ($1, $2, now(), now(), NULL)
+         ON CONFLICT (account_id, capability) DO NOTHING`,
+        [accountId, capability],
+      );
+    },
+    async revokeCapability(accountId: string, capability: CapabilityCode): Promise<boolean> {
+      const result = await db.query(
+        `DELETE FROM account_capability_grants WHERE account_id = $1 AND capability = $2`,
+        [accountId, capability],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
   };
 }
@@ -289,6 +357,19 @@ export function createPgAuditStore(db: Queryable): AuditStore {
         [limit],
       );
       return result.rows.map((row) => mapAudit(row));
+    },
+    async query(filter: AuditQuery): Promise<readonly AuditEvent[]> {
+      const result = await db.query<Row>(
+        `SELECT id, actor_account_id, actor_wallet, action, occurred_at,
+                entity_type, entity_id, metadata, correlation_id, created_at
+         FROM audit_events
+         ORDER BY occurred_at ASC, id ASC
+         LIMIT 1000`,
+      );
+      return result.rows
+        .map((row) => mapAudit(row))
+        .filter((event) => matchesAuditQuery(event, filter))
+        .slice(-filter.limit);
     },
   };
 }

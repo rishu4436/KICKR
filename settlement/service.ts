@@ -300,6 +300,14 @@ export class SettlementService {
     return row;
   }
 
+  async listAll(): Promise<SettlementRecord[]> {
+    return this.store.listSettlements();
+  }
+
+  async listAllRows(): Promise<SettlementResultRow[]> {
+    return this.store.listAllResultRows();
+  }
+
   async getById(settlementId: string): Promise<SettlementRecord | null> {
     return this.store.getSettlement(settlementId);
   }

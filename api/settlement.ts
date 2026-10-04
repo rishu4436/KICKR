@@ -3,6 +3,7 @@ import type { Principal } from "../auth/types.js";
 import type { Permission } from "../rbac/permissions.js";
 import { AppError } from "../shared/errors.js";
 import type { AppEnv, AppDeps } from "./server.js";
+import { assertApproverIsNotCalculator } from "../settlement/approval-guard.js";
 import { decideClaim, decideSettlementCommit, type ClaimObservation, type SettlementCommitObservation } from "../settlement/verify.js";
 import { buildClaimPlan, type ClaimPlan } from "../solana/escrow.js";
 import { observeFinalizedClaim, RpcUnavailable } from "../solana/chain.js";
@@ -298,6 +299,7 @@ export function registerSettlementRoutes(
     const principal = await authenticate(c);
     await authorize(c, "REVIEW_RESULT");
     const service = requireSettlement(deps);
+    await assertApproverIsNotCalculator(deps.audit, c.req.param("id"), principal.accountId);
     const settlement = await service.approve(c.req.param("id"), principal.accountId, deps.clock().toISOString());
     await appendAudit(deps, c, principal, "RESULT_APPROVED", settlement.id, {
       contestId: settlement.contestId,

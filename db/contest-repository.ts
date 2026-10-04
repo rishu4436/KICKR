@@ -512,6 +512,12 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
       );
       return result.rows.map(contestFrom);
     },
+    async listContests() {
+      const result = await db.query<Row>(
+        `SELECT ${CONTEST_COLUMNS} FROM contests ORDER BY created_at`,
+      );
+      return result.rows.map(contestFrom);
+    },
     async listEntries(contestId) {
       const result = await db.query<Row>(
         `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,

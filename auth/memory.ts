@@ -31,6 +31,20 @@ export class InMemoryAccountRepository implements AccountRepository {
     this.byId.set(account.id, copy);
     return { ...account };
   }
+
+  async listAll(): Promise<AccountRecord[]> {
+    return [...this.byId.values()].map((row) => ({ ...row }));
+  }
+
+  async suspend(id: string, now: Date): Promise<boolean> {
+    const row = this.byId.get(id);
+    if (!row || row.deletedAt) {
+      return false;
+    }
+    row.deletedAt = now;
+    row.updatedAt = now;
+    return true;
+  }
 }
 
 export class InMemoryNonceRepository implements NonceRepository {
@@ -72,6 +86,17 @@ export class InMemorySessionRepository implements SessionRepository {
   async findByTokenHash(tokenHash: string): Promise<SessionRecord | null> {
     const row = this.byHash.get(tokenHash);
     return row ? { ...row } : null;
+  }
+
+  async findById(sessionId: string): Promise<SessionRecord | null> {
+    const row = this.byId.get(sessionId);
+    return row ? { ...row } : null;
+  }
+
+  async listByAccount(accountId: string): Promise<SessionRecord[]> {
+    return [...this.byId.values()]
+      .filter((row) => row.accountId === accountId)
+      .map((row) => ({ ...row }));
   }
 
   async revoke(sessionId: string, now: Date): Promise<boolean> {

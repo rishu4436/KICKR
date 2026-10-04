@@ -1,5 +1,6 @@
 /**
  * Audit event names. Append-only. Phase 6 extends settlement/result/refund actions.
+ * Phase 7 adds access-control and permission-denial names. Still no update or delete.
  */
 export const AUDIT_EVENTS = [
   "ACCOUNT_LOGIN",
@@ -36,6 +37,13 @@ export const AUDIT_EVENTS = [
   "REFUND_CLAIMED",
   "CONTEST_VOIDED",
   "CONTEST_REFUNDED",
+  "ROLE_GRANTED",
+  "ROLE_REMOVED",
+  "CAPABILITY_GRANTED",
+  "CAPABILITY_REMOVED",
+  "ACCOUNT_SUSPENDED",
+  "SESSION_REVOKED",
+  "PERMISSION_DENIED",
 ] as const;
 
 export type AuditEventName = (typeof AUDIT_EVENTS)[number];

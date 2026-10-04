@@ -193,6 +193,30 @@ export class AuthService {
     return principal;
   }
 
+  listAccounts() {
+    return this.accounts.listAll();
+  }
+
+  suspendAccount(id: string, now: Date) {
+    return this.accounts.suspend(id, now);
+  }
+
+  findAccount(id: string) {
+    return this.accounts.findById(id);
+  }
+
+  listSessions(accountId: string) {
+    return this.sessions.listByAccount(accountId);
+  }
+
+  findSession(sessionId: string) {
+    return this.sessions.findById(sessionId);
+  }
+
+  revokeSessionById(sessionId: string, now: Date) {
+    return this.sessions.revoke(sessionId, now);
+  }
+
   private async getOrCreateAccount(walletAddress: string, now: Date) {
     const existing = await this.accounts.findByWallet(walletAddress);
     if (existing) {

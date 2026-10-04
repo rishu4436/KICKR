@@ -32,6 +32,9 @@ export interface AccountRepository {
   findById(id: string): Promise<AccountRecord | null>;
   findByWallet(walletAddress: string): Promise<AccountRecord | null>;
   insert(account: AccountRecord): Promise<AccountRecord>;
+  listAll(): Promise<AccountRecord[]>;
+  /** Soft-disable. Sets deleted_at. Does not delete the wallet row. */
+  suspend(id: string, now: Date): Promise<boolean>;
 }
 
 export interface NonceRepository {
@@ -44,6 +47,8 @@ export interface NonceRepository {
 export interface SessionRepository {
   insert(session: SessionRecord): Promise<void>;
   findByTokenHash(tokenHash: string): Promise<SessionRecord | null>;
+  findById(sessionId: string): Promise<SessionRecord | null>;
+  listByAccount(accountId: string): Promise<SessionRecord[]>;
   /** Returns true when this call transitioned the session to revoked. */
   revoke(sessionId: string, now: Date): Promise<boolean>;
 }

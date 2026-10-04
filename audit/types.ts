@@ -1,4 +1,5 @@
 import type { AuditEventName } from "./events.js";
+import type { AuditQuery } from "./query.js";
 
 /**
  * Append-only audit record.
@@ -25,4 +26,6 @@ export interface AuditEvent extends AuditEventInput {
 export interface AuditStore {
   append(input: AuditEventInput): Promise<AuditEvent>;
   list(limit: number): Promise<readonly AuditEvent[]>;
+  /** Read-only filter. There is no update or delete. */
+  query(filter: AuditQuery): Promise<readonly AuditEvent[]>;
 }

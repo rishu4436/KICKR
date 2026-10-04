@@ -38,7 +38,7 @@ export type CapabilityCode = (typeof CAPABILITIES)[number];
  * Least-privilege matrix. The code map is authoritative for authorization.
  * The database stores role and capability assignments, not a second matrix.
  *
- * RUN_SETTLEMENT is defined and granted to nobody in Phase 6.
+ * RUN_SETTLEMENT is defined and granted to nobody. Phase 7 does not grant it.
  * Settlement prepare/reconcile APIs require it for ops wiring only.
  * On-chain commit is signed by init_authority offline — not a backend hot wallet.
  * CEO_HEAD explicitly does not execute settlement.
@@ -107,6 +107,9 @@ export function assertMatrixInvariants(): void {
   }
   if (granted.has("INDEXER_CONFIRM_ENTRY")) {
     throw new Error("INDEXER_CONFIRM_ENTRY must not be granted to a role or capability");
+  }
+  if (granted.has("RUN_SETTLEMENT")) {
+    throw new Error("RUN_SETTLEMENT must not be granted to a role or capability");
   }
 }
 

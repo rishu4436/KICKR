@@ -1,4 +1,5 @@
 import { newId } from "../shared/ids.js";
+import { matchesAuditQuery, type AuditQuery } from "./query.js";
 import { parseAuditEventInput } from "./validate.js";
 import type { AuditEvent, AuditEventInput, AuditStore } from "./types.js";
 
@@ -23,5 +24,15 @@ export class InMemoryAuditStore implements AuditStore {
       ...event,
       metadata: { ...event.metadata },
     }));
+  }
+
+  async query(filter: AuditQuery): Promise<readonly AuditEvent[]> {
+    return this.events
+      .filter((event) => matchesAuditQuery(event, filter))
+      .slice(-filter.limit)
+      .map((event) => ({
+        ...event,
+        metadata: { ...event.metadata },
+      }));
   }
 }
