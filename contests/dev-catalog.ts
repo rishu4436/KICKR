@@ -43,6 +43,48 @@ export const DEV_PAYOUT_POLICIES: readonly PayoutPolicyRecord[] = [
     configuration: { shape: "GRAND_LEAGUE", calculation: "none" },
     createdAt: SEEDED_AT,
   },
+  {
+    id: "52000000-0000-4000-8000-000000000001",
+    version: 2,
+    policyType: "HEAD_TO_HEAD",
+    configuration: {
+      shape: "HEAD_TO_HEAD",
+      calculation: "winner_takes_prize_pool",
+      tiePolicy: "entry_id_asc",
+      note: "DEV Phase 6. Winner gets 100% of prize pool after fees.",
+    },
+    createdAt: "2026-10-04T00:00:00.000Z",
+  },
+  {
+    id: "52000000-0000-4000-8000-000000000002",
+    version: 2,
+    policyType: "WINNER_TAKES_ALL",
+    configuration: {
+      shape: "WINNER_TAKES_ALL",
+      calculation: "winner_takes_prize_pool",
+      tiePolicy: "entry_id_asc",
+      note: "DEV Phase 6. Rank 1 gets 100% of prize pool after fees.",
+    },
+    createdAt: "2026-10-04T00:00:00.000Z",
+  },
+  {
+    id: "52000000-0000-4000-8000-000000000003",
+    version: 2,
+    policyType: "GRAND_LEAGUE",
+    configuration: {
+      shape: "GRAND_LEAGUE",
+      calculation: "rank_bps",
+      tiePolicy: "entry_id_asc",
+      ranks: [
+        { rank: 1, bps: 4000 },
+        { rank: 2, bps: 3000 },
+        { rank: 3, bps: 2000 },
+        { rank: 4, bps: 1000 },
+      ],
+      note: "DEV Phase 6 schedule. Sum of rank bps = 10000 of prize pool.",
+    },
+    createdAt: "2026-10-04T00:00:00.000Z",
+  },
 ];
 
 function template(
@@ -71,9 +113,9 @@ function template(
   };
 }
 
-const h2h = DEV_PAYOUT_POLICIES[0];
-const wta = DEV_PAYOUT_POLICIES[1];
-const grand = DEV_PAYOUT_POLICIES[2];
+const h2h = DEV_PAYOUT_POLICIES.find((p) => p.policyType === "HEAD_TO_HEAD" && p.version === 2);
+const wta = DEV_PAYOUT_POLICIES.find((p) => p.policyType === "WINNER_TAKES_ALL" && p.version === 2);
+const grand = DEV_PAYOUT_POLICIES.find((p) => p.policyType === "GRAND_LEAGUE" && p.version === 2);
 if (!h2h || !wta || !grand) {
   throw new Error("dev payout policies missing");
 }

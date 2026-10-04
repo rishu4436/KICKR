@@ -238,6 +238,7 @@ async function renderContests(id: string): Promise<void> {
       <h2>${contestTitle(contest)}</h2>
       <p class="quiet">${formatUsdc(contest.entryFeeBaseUnits)} USDC entry · ${contest.remaining} seats left · ${contest.status.replaceAll("_", " ")}</p>
       <p class="quiet">Estimated pool ${formatUsdc(contest.estimatedPrizePoolBaseUnits)} USDC. ${contest.estimateLabel}.</p>
+      <p class="quiet">Settlement stages: Match Final → Result Processing → Results Verified → Prize Available → Claim Prize</p>
       <button class="primary" data-join="${contest.contestId}">Join</button>
     </article>`).join("");
   app.innerHTML = shell("Contests", `
@@ -505,6 +506,15 @@ async function renderDetail(id: string): Promise<void> {
   } catch {
     liveHtml = `<p class="quiet">No live score payload yet for this match.</p>`;
   }
+  let settlementHtml = "";
+  if (state.token && ["FINAL", "DATA_FINALIZING", "FULL_TIME"].includes(match.status)) {
+    settlementHtml = `<div class="card"><h3>Settlement</h3>
+      <p><strong>Match Final</strong> → Result Processing → Results Verified → Prize Available → Claim Prize</p>
+      <p class="quiet">Prize and claim status load per contest entry. Claimed only after a verified on-chain tx with explorer link. Never marked paid on click.</p>
+      <p class="note">USDC moves only via the Solana program vault (claim_payout). Backend cannot transfer funds.</p>
+    </div>`;
+  }
+
   app.innerHTML = shell(`${match.home.name} vs ${match.away.name}`, `
     <p class="quiet">${match.competition} · ${kickoffLabel(match.kickoffAt)} · ${match.status.replaceAll("_", " ")}${match.venue ? ` · ${match.venue}` : ""}</p>
     <div class="row">
@@ -513,6 +523,7 @@ async function renderDetail(id: string): Promise<void> {
       <button class="primary" id="build" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI closed"}</button>
     </div>
     ${liveHtml}
+    ${settlementHtml}
   `);
   document.querySelector("#contests")?.addEventListener("click", () => {
     location.hash = `#/matches/${id}/contests`;

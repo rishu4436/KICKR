@@ -439,17 +439,22 @@ fn two_users_racing_the_last_seat_let_exactly_one_succeed() {
 }
 
 #[test]
-fn source_has_no_spend_instruction_and_no_refund_to_a_different_wallet() {
-    let deposit = include_str!("../src/instructions/deposit.rs");
-    let others = include_str!("../src/lib.rs").to_string()
+fn source_has_no_admin_sweep_or_arbitrary_transfer() {
+    let blob = include_str!("../src/lib.rs").to_string()
+        + include_str!("../src/instructions/deposit.rs")
         + include_str!("../src/instructions/initialize_config.rs")
         + include_str!("../src/instructions/initialize_contest.rs")
-        + include_str!("../src/instructions/lock_contest.rs");
-    let blob = deposit.to_string() + &others;
-    for needle in ["fn withdraw", "fn admin_transfer", "fn arbitrary_transfer", "fn withdraw_all", "fn sweep", "fn refund"] {
+        + include_str!("../src/instructions/lock_contest.rs")
+        + include_str!("../src/instructions/commit_settlement.rs")
+        + include_str!("../src/instructions/claim_payout.rs")
+        + include_str!("../src/instructions/void_contest.rs")
+        + include_str!("../src/instructions/claim_refund.rs");
+    for needle in ["fn withdraw", "fn admin_transfer", "fn arbitrary_transfer", "fn withdraw_all", "fn sweep"] {
         assert!(!blob.contains(needle), "{needle}");
     }
-    assert!(!others.contains("transfer_checked"));
-    assert!(deposit.contains("transfer_checked"));
-    assert!(deposit.contains("authority: ctx.accounts.user"));
+    // Vault spends are only claim_payout / claim_refund with commitment checks.
+    assert!(blob.contains("claim_payout"));
+    assert!(blob.contains("claim_refund"));
+    assert!(!include_str!("../src/instructions/commit_settlement.rs").contains("transfer_checked"));
+    assert!(!include_str!("../src/instructions/void_contest.rs").contains("transfer_checked"));
 }

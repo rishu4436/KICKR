@@ -38,9 +38,10 @@ export type CapabilityCode = (typeof CAPABILITIES)[number];
  * Least-privilege matrix. The code map is authoritative for authorization.
  * The database stores role and capability assignments, not a second matrix.
  *
- * RUN_SETTLEMENT is defined and granted to nobody.
- * TODO: which principal may hold RUN_SETTLEMENT is unspecified. It is not a
- * human role in this matrix (CEO_HEAD explicitly does not execute settlement).
+ * RUN_SETTLEMENT is defined and granted to nobody in Phase 6.
+ * Settlement prepare/reconcile APIs require it for ops wiring only.
+ * On-chain commit is signed by init_authority offline — not a backend hot wallet.
+ * CEO_HEAD explicitly does not execute settlement.
  *
  * REVIEW_RESULT is not on any role. It comes only from the REVIEWER capability.
  * TODO: whether a reviewer also needs READ_CONTEST is unspecified. This map

@@ -1601,6 +1601,7 @@ dependencies = [
  "solana-keypair",
  "solana-message",
  "solana-pubkey 3.0.0",
+ "solana-sha256-hasher",
  "solana-signer",
  "solana-transaction",
 ]

@@ -18,7 +18,9 @@ import { loginRequestSchema, nonceRequestSchema } from "./schemas.js";
 import { registerFootballRoutes } from "./football.js";
 import { registerContestRoutes } from "./contests.js";
 import { registerLiveRoutes } from "./live.js";
+import { registerSettlementRoutes } from "./settlement.js";
 import type { LiveScoringService } from "../live/service.js";
+import type { SettlementService } from "../settlement/service.js";
 import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import { existsSync } from "node:fs";
@@ -39,6 +41,7 @@ export interface AppDeps {
   football: FootballService;
   contests: ContestService;
   live?: LiveScoringService;
+  settlement?: SettlementService;
   redis: RedisClient;
   clientDir?: string;
   logger: Logger;
@@ -205,6 +208,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     deps,
     (c) => authenticate(deps, c),
     async (c, permission) => requirePermission(deps, c, permission),
+  );
+  registerSettlementRoutes(
+    app,
+    deps,
+    (c) => authenticate(deps, c),
+    (c, permission) => requirePermission(deps, c, permission),
   );
 
   if (deps.clientDir && existsSync(deps.clientDir)) {

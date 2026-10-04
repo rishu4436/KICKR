@@ -1,4 +1,12 @@
 import { IllegalTransitionError } from "../shared/errors.js";
+import {
+  SETTLEMENT_TRANSITIONS as SETTLEMENT_ENTITY_TRANSITIONS,
+} from "../settlement/states.js";
+export {
+  SETTLEMENT_STATES,
+  SETTLEMENT_TRANSITIONS,
+  type SettlementState,
+} from "../settlement/states.js";
 
 /**
  * Reusable transition guard. There is no setStatus and no raw status setter.
@@ -30,7 +38,7 @@ import { IllegalTransitionError } from "../shared/errors.js";
  * absent: Phase 4 may add it only after on-chain verification. INDEXER_CONFIRM_ENTRY
  * is not a status write on this machine. Phase 3 join does not confirm an entry.
  * TODO: REVIEW states and transitions are unspecified.
- * TODO: SETTLEMENT states and transitions are unspecified.
+ * Phase 6 fills SETTLEMENT states. See settlement/states.ts.
  */
 
 export const ENTITIES = [
@@ -85,6 +93,9 @@ export const CONTEST_TRANSITIONS: ReadonlyArray<readonly [ContestState, ContestS
   ["OPEN", "VOID"],
   ["PARTIALLY_FILLED", "VOID"],
   ["FULL", "VOID"],
+  ["LOCKED", "VOID"],
+  ["IN_PROGRESS", "VOID"],
+  ["IN_REVIEW", "VOID"],
 ];
 
 export const TEAM_STATES = ["DRAFT", "LOCKED"] as const;
@@ -142,6 +153,7 @@ export type EntryState = (typeof ENTRY_STATES)[number];
 export const ENTRY_TRANSITIONS: ReadonlyArray<readonly [EntryState, EntryState]> = [
   ["PENDING", "CANCELLED"],
   ["PENDING", "CONFIRMED"],
+  ["CONFIRMED", "REFUNDED"],
 ];
 
 const TRANSITIONS: Record<EntityName, ReadonlyArray<readonly [string, string]>> = {
@@ -151,7 +163,7 @@ const TRANSITIONS: Record<EntityName, ReadonlyArray<readonly [string, string]>> 
   MATCH: MATCH_TRANSITIONS,
   ENTRY: ENTRY_TRANSITIONS,
   REVIEW: [],
-  SETTLEMENT: [],
+  SETTLEMENT: SETTLEMENT_ENTITY_TRANSITIONS,
 };
 
 const ENTITY_SET: ReadonlySet<string> = new Set(ENTITIES);

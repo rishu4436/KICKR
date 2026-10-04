@@ -1,7 +1,7 @@
 [package]
 name = "kickr_escrow"
 version = "0.1.0"
-description = "KICKR devnet contest deposit escrow. No withdrawal instruction."
+description = "KICKR devnet contest deposit escrow. Deposit, settlement commitment, and claim. No admin sweep."
 edition.workspace = true
 rust-version.workspace = true
 
@@ -22,6 +22,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = "1.2.0"
 anchor-spl = "1.2.0"
+solana-sha256-hasher = { version = "3.1.0", features = ["sha2"] }
 
 [dev-dependencies]
 litesvm = "0.10.0"

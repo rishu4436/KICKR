@@ -10,6 +10,9 @@ import {
 export const CONFIG_SEED = new TextEncoder().encode("config");
 export const CONTEST_SEED = new TextEncoder().encode("contest");
 export const DEPOSIT_SEED = new TextEncoder().encode("deposit");
+export const SETTLEMENT_SEED = new TextEncoder().encode("settlement");
+export const CLAIM_SEED = new TextEncoder().encode("claim");
+export const REFUND_SEED = new TextEncoder().encode("refund");
 
 export interface EscrowClientConfig {
   programId: string;
@@ -174,4 +177,122 @@ export function getContestEscrowState(plan: Pick<DepositPlan, "programId" | "con
   const contestPda = deriveContestPda(programId, uuidToBytes(plan.contestId));
   const vault = deriveVaultAddress(new PublicKey(plan.mint), contestPda, new PublicKey(plan.tokenProgramId));
   return { contestPda: contestPda.toBase58(), vault: vault.toBase58() };
+}
+
+
+export function deriveSettlementPda(
+  programId: PublicKey,
+  contestPda: PublicKey,
+  settlementVersion: number,
+): PublicKey {
+  const version = Buffer.alloc(4);
+  version.writeUInt32LE(settlementVersion);
+  return PublicKey.findProgramAddressSync(
+    [SETTLEMENT_SEED, contestPda.toBuffer(), version],
+    programId,
+  )[0];
+}
+
+export function deriveClaimPda(
+  programId: PublicKey,
+  contestPda: PublicKey,
+  settlementVersion: number,
+  entryId: Uint8Array,
+): PublicKey {
+  const version = Buffer.alloc(4);
+  version.writeUInt32LE(settlementVersion);
+  return PublicKey.findProgramAddressSync(
+    [CLAIM_SEED, contestPda.toBuffer(), version, Buffer.from(entryId)],
+    programId,
+  )[0];
+}
+
+export function deriveRefundPda(programId: PublicKey, contestPda: PublicKey, depositor: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [REFUND_SEED, contestPda.toBuffer(), depositor.toBuffer()],
+    programId,
+  )[0];
+}
+
+export function buildCommitSettlementInstruction(input: {
+  programId: string;
+  initAuthority: PublicKey;
+  configPda: PublicKey;
+  contestPda: PublicKey;
+  settlementVersion: number;
+  resultHash: Uint8Array;
+  merkleRoot: Uint8Array;
+  totalPayoutBaseUnits: number;
+  feeBaseUnits: number;
+}): TransactionInstruction {
+  const programId = new PublicKey(input.programId);
+  const settlement = deriveSettlementPda(programId, input.contestPda, input.settlementVersion);
+  const data = new Uint8Array(8 + 4 + 32 + 32 + 8 + 8);
+  data.set(anchorDiscriminator("commit_settlement"), 0);
+  const view = new DataView(data.buffer);
+  view.setUint32(8, input.settlementVersion, true);
+  data.set(input.resultHash, 12);
+  data.set(input.merkleRoot, 44);
+  view.setBigUint64(76, BigInt(input.totalPayoutBaseUnits), true);
+  view.setBigUint64(84, BigInt(input.feeBaseUnits), true);
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.initAuthority, isSigner: true, isWritable: true },
+      { pubkey: input.configPda, isSigner: false, isWritable: false },
+      { pubkey: input.contestPda, isSigner: false, isWritable: true },
+      { pubkey: settlement, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+export function buildClaimPayoutInstruction(input: {
+  programId: string;
+  claimant: PublicKey;
+  contestPda: PublicKey;
+  settlementVersion: number;
+  entryId: string;
+  amountBaseUnits: number;
+  proof: Uint8Array[];
+  mint: PublicKey;
+  vault: PublicKey;
+  claimantToken: PublicKey;
+  tokenProgramId: PublicKey;
+}): TransactionInstruction {
+  const programId = new PublicKey(input.programId);
+  const entryBytes = uuidToBytes(input.entryId);
+  const settlement = deriveSettlementPda(programId, input.contestPda, input.settlementVersion);
+  const claim = deriveClaimPda(programId, input.contestPda, input.settlementVersion, entryBytes);
+  // discriminator + version + entry_id + amount + vec len + proofs
+  const proofBytes = input.proof.length * 32;
+  const data = new Uint8Array(8 + 4 + 16 + 8 + 4 + proofBytes);
+  data.set(anchorDiscriminator("claim_payout"), 0);
+  const view = new DataView(data.buffer);
+  view.setUint32(8, input.settlementVersion, true);
+  data.set(entryBytes, 12);
+  view.setBigUint64(28, BigInt(input.amountBaseUnits), true);
+  view.setUint32(36, input.proof.length, true);
+  let offset = 40;
+  for (const node of input.proof) {
+    data.set(node, offset);
+    offset += 32;
+  }
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: input.claimant, isSigner: true, isWritable: true },
+      { pubkey: input.contestPda, isSigner: false, isWritable: true },
+      { pubkey: settlement, isSigner: false, isWritable: false },
+      { pubkey: claim, isSigner: false, isWritable: true },
+      { pubkey: input.mint, isSigner: false, isWritable: false },
+      { pubkey: input.vault, isSigner: false, isWritable: true },
+      { pubkey: input.claimantToken, isSigner: false, isWritable: true },
+      { pubkey: input.tokenProgramId, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
 }

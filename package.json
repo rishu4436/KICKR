@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 5: live scoring path. No settlement and no mainnet mint.",
+  "description": "KICKR Phase 6: settlement commitment + claim. No mainnet mint. Program is USDC authority.",
   "type": "module",
   "engines": {
     "node": ">=20"
