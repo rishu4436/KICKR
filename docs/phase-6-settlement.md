@@ -225,7 +225,7 @@ APPROVED snapshot only; `contest_entries.team_version_id`; captain 2× / vice 3/
 | UNIT TEST | Vitest / LiteSVM / mock wallet adapter (labelled) |
 | LOCAL FIXTURE | In-memory Phase 6.1 / 6.1.1 harness through real scoring + API |
 | DEVNET SCRIPT | `scripts/phase6_1-devnet-e2e.ts` (payer key only in `/tmp`) |
-| DEVNET BROWSER E2E | Real Phantom/Solflare in a user browser — **not** a box-driven keypair |
+| DEVNET BROWSER E2E | Real Phantom in the KICKR UI — section C. **Not** a box-driven keypair. `VQzU…` is external/local, not this class |
 
 Phase 6 Devnet `1111…1111` remains a **historical protocol fixture**. Phase 6.1 Devnet result hash `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` is the **fresh scoring-to-settlement Devnet proof**.
 
@@ -235,7 +235,7 @@ Phase 6 Devnet `1111…1111` remains a **historical protocol fixture**. Phase 6.
 
 ### Browser Devnet E2E status
 
-**NOT RUN** — no user Phantom/Solflare is connected in this agent box browser. The adapter (`app/src/claim-flow.ts` `readBrowserWallet`) is implemented and covered by UNIT TEST mock providers. Driving `/tmp/kickr-devnet-payer.json` as if it were a browser wallet is explicitly **not** a browser E2E. Phase 6.1.1 acceptance for browser claim remains open until a real connected wallet signs.
+**RAN** — the only in-app browser claim is the Phase 6.1.3 Claim Prize proof in section C below. It was initiated from the KICKR Claim Prize button after Phantom login. Driving `/tmp/kickr-devnet-payer.json` as a browser wallet is still **not** a browser E2E. The earlier signature `VQzUwc7btnVKiCFFJn5s4fTf7R8UFFtvMp9VrMWLoTTV1GJb4ZveCZsdDya6k2bF5otEXpFMBs6iDKTp4AuBwpS` is an external/local claim-page proof for a different settlement (`5CM8P1PU…`), not this in-app E2E.
 
 ## Phase 6.1.2 Browser wallet session for Claim Prize
 
@@ -256,7 +256,106 @@ No second auth protocol. Unsigned / invalid signatures are rejected by the exist
 |---|---|
 | UNIT TEST / LOCAL FIXTURE | Vitest + mock wallet adapters |
 | DEVNET SCRIPT | Payer-key scripts under `/tmp` (e.g. phantom-claimable prepare) |
-| Scripted / wallet claim tx | e.g. `VQzUwc7btnVKiCFFJn5s4fTf7R8UFFtvMp9VrMWLoTTV1GJb4ZveCZsdDya6k2bF5otEXpFMBs6iDKTp4AuBwpS` — **browser wallet claim outside the KICKR Claim Prize button** (not in-app E2E) |
-| DEVNET BROWSER / IN-APP E2E | Claim Prize clicked in the KICKR UI with a real Phantom signature — **still open** until observed |
+| EXTERNAL / LOCAL claim-page proof | `VQzUwc7btnVKiCFFJn5s4fTf7R8UFFtvMp9VrMWLoTTV1GJb4ZveCZsdDya6k2bF5otEXpFMBs6iDKTp4AuBwpS` — earlier local claim-page proof for a **different** settlement (`5CM8P1PU…`). Not the in-app E2E. |
+| DEVNET BROWSER / IN-APP E2E | Claim Prize clicked in the KICKR UI with a real Phantom signature — **observed** (section C). Signature `5VdcsuTP2v2uC82GX2DBdtF5dE7SkHMmrazV4NCQMdfHpnigwnzgsZnNy8rnbQpryXPVCpWeimExko4zQH9VD9fj` |
 
-Do **not** label `VQzU…` as in-app E2E.
+Do **not** label `VQzU…` as in-app E2E. It stays external/local for settlement `5CM8P1PU…`.
+
+## Phase 6 closeout — evidence classes
+
+Three proofs. Do not merge them.
+
+### A. Historical Phase 6 protocol fixture (historical only)
+
+All-ones result hash. Protocol wiring after the program upgrade. **Not** a scoring-derived result and **not** the Phase 6.1 or in-app proof.
+
+| Field | Value |
+|---|---|
+| result_hash | `1111111111111111111111111111111111111111111111111111111111111111` |
+| merkle_root | `62aa2891b219e3841748e22a25daccabb8a4accecf00cc28bc9b61dcd9d25878` |
+| Contest PDA | `8Z2qH64FatTjNUczJXjH1vmQgBeWT9q9zP2Vjhp8bJ1X` |
+| Vault | `8vUCRAgKgEWWoMvK1oZ3wx2imRPzwRDX7MgHWechWnKw` |
+| Settlement PDA | `TyhQW8mnVSUvCvXWkexWJSXXME6Gr8XN1VcVpnhEazp` |
+| commit_settlement | `4LshyQp4kPLH7Kavq53caCCMcMYagWU1qY5qR8uEBjFzv9tTXGhFQGaMyHKcwS8rVR7Je3qwdniDsS8afm1zmoAG` |
+| claim_payout | `4xyxz6muE9SDQYuj2WoVUy9umh15rCWRK5niuGGG31MX3JHxZVy1xnKLRnLLCZ2FSvUuYnuky8Zr7ErjnaxhMFUw` |
+| Vault before / after | `10000000` → `1000000` (fee retained; no admin withdraw) |
+
+Program upgrade and the other setup signatures for this fixture stay in “Devnet settlement / claim status” above. Second claim for that entry failed (replay-safe).
+
+### B. Phase 6.1 scripted Devnet proof
+
+Scripted scoring-to-settlement Devnet proof (`scripts/phase6_1-devnet-e2e.ts`). Result hash is **not** all-ones. Not the browser Claim Prize button.
+
+| Field | Value |
+|---|---|
+| Contest PDA | `6JfYgriQ1YqNnUgMorqvVHYnEvfUcuwtPciYc9LLoF3a` |
+| Vault | `AkpoZHgDYLh1eJd772WhzYV2YMX16yrDDkepatggBRhb` |
+| Settlement PDA | `GaVWL5teJiKeZdupKDhmMxyzicYS7Bb5oRvLyjBFSMoM` |
+| result_hash | `3a42cd4000de85b571d6eb1355553b4328de7a4af74405a5d3e94abc81101c91` |
+| merkle_root | `42371c23ee96d546796c78d6c174f00344f9924011b3716fdff2f736dc353a70` |
+| settlement_hash | `a5147cdd351d855dfd886a521a2b3ebcf82b6ea0b09260289956faca4f32d8b1` |
+| commit_settlement | `SoCKK59GGxTpxVLAAwmuRs4CR9thKrPXYd4uvs8ZQaziVG2g34F4eTaaHrrn1noXViE8y4MtebJQnzC3uGDbLDt` |
+| claim_payout | `2CNjNBrvbRoVa8hxzoQW6SBDRZk2N6FkWP2VDG3MoBaTFePVipGXpYLZBwNJxVBh4Cbi3ioKDstLASw782Xhqfvv` |
+| Vault before / after | `4000000` → `400000` |
+| Claimed amount | `3600000` |
+| Fee retained | `400000` |
+| Winner entry | `74f2db93-8137-4527-bdc8-5f3a4e5c8d31` |
+| Score / rank / payout | `19500` milli-points / rank `1` / `3600000` |
+| Destination | `AtWCqPeRhHtdxLiA9B3QpyR2uLzbJTVVuLgDwVCbCx2S` |
+
+Second scripted claim was blocked before broadcast (`secondClaimBlockedBeforeSubmit: true`). No fabricated failed signature.
+
+### C. Phase 6.1.1 / 6.1.2 / 6.1.3 real browser in-app E2E
+
+The only transaction called the in-app E2E. IDs match `/tmp/kickr-phase6_1_3-fixture.json` and Postgres `contest_settlements` / `settlement_result_rows` for this contest. That fixture file was written **before** the claim (`claimSubmitted: false`, `claimStatus: UNCLAIMED`, `vaultAfter` still `10000000`). Post-claim vault and claimant ATA amounts below are from the finalized `claim_payout` transaction, not from that pre-claim snapshot. The claim signature matches this contest.
+
+Persisted row: settlement `62483601-3cdb-4c16-98e2-52ad77624f7b` version `1` status `SETTLEMENT_CONFIRMED`; winner entry `f4bed88a-2a3e-472a-a9d2-c47d82e25f3d` `claim_status=CLAIMED`, `claimed_at` `2026-10-04 18:05:12.125` IST. Commit confirmed slot on the settlement row: `507362507`.
+
+Closeout re-read the claim with a finalized `getTransaction` only. It did **not** submit a second claim transaction.
+
+| Field | Value |
+|---|---|
+| Claim signature | `5VdcsuTP2v2uC82GX2DBdtF5dE7SkHMmrazV4NCQMdfHpnigwnzgsZnNy8rnbQpryXPVCpWeimExko4zQH9VD9fj` |
+| Chain | finalized, `err` null, slot `507365932`, log `Instruction: ClaimPayout` |
+| Signer / claimant | `GjJYQen9kw4K3ETpeKCTbxvmfzDSYPJoG2Wy3kC9Je5S` |
+| Contest | `60e97815-8e3a-4eb5-91e3-320a64147889` |
+| Match | `10000000-0000-4000-8000-000000000001` |
+| Entry | `f4bed88a-2a3e-472a-a9d2-c47d82e25f3d` |
+| Settlement id / version | `62483601-3cdb-4c16-98e2-52ad77624f7b` / `1` |
+| Settlement signature | `5Um2NvmzhG9GWaG7fYRJmeZbJoLc5qp9KficWnxTPZCCqhGZxGPkoiX4cTTm71x6UmUCBFPuPPeq78NpuP2VhZQw` |
+| settlement_hash | `5713abcfcc84d3ad57111c51962cad41115e822b583e22322c0f69a0b1027ac0` |
+| result_hash | `6f59816ba9827bdf34a499c1015cae3f4712a9ad23305745b584b9a069f2926b` |
+| merkle_root | `fae38dd49197348830e16fb8e9810b3bbd208aaf1a967a8f28dcf0f169ef22eb` |
+| Contest PDA | `jhECejHNU757C1pNAMVxWYFWscFM8XiATXoqisCTZkQ` |
+| Vault | `FN2X4r64qjYy7F4D2t7Uht5LRqoNYbSU79dRz8REysNV` |
+| Settlement PDA | `A8xk3vzGLzZs6wuPjsaoXYVAfXCfpHGmQLpKZazzsPrB` |
+| Claim PDA | `4CSFz3JKSAKHwWxesguz75o7WfQhNU8AdoskGUQdp6ma` |
+| Score / rank | `19500` milli-points / rank `1` |
+| Payout | `9000000` (9.00 USDC) |
+| Fee retained | `1000000` (1.00 USDC) |
+| Vault token balance | `10000000` → `1000000` (10.00 → 1.00 USDC) |
+| Claimant ATA | `BGvzXXzbp9ZA3twcJo1Xwev7D3gu387qdmrQJ2nAYhzz` `3240000` → `12240000` |
+| Explorer | https://explorer.solana.com/tx/5VdcsuTP2v2uC82GX2DBdtF5dE7SkHMmrazV4NCQMdfHpnigwnzgsZnNy8rnbQpryXPVCpWeimExko4zQH9VD9fj?cluster=devnet |
+
+Flow observed for this claim: finished contest → authenticated Phantom → owner-scoped `my-result` → Prize Available → Claim Prize → Phantom sign → submitted → finalized reconciliation → `CLAIMED` → verified USDC transfer → Explorer link.
+
+Invariant: authenticated wallet = entry destination = `ClaimPlan` destination = `claim_payout` claimant (`GjJYQen9kw4K3ETpeKCTbxvmfzDSYPJoG2Wy3kC9Je5S`).
+
+Security (unchanged by this closeout): no backend hot wallet; no arbitrary admin USDC withdrawal; `RUN_SETTLEMENT` granted to nobody; the client cannot invent payout, destination, or proof; a second claim is replay-protected; claim only after finalized reconciliation; the development signer is test/local only.
+
+Post-claim UI, observed and **not** a second claim: the real KICKR app was refreshed at `http://127.0.0.1:3000/#/matches/10000000-0000-4000-8000-000000000001/contests`. The contest card for `60e97815-8e3a-4eb5-91e3-320a64147889` was still visible. The Claim Prize button was absent. Status text was “Prize claimed · 9.00 USDC · Transaction verified · View on Solana”. The explorer href was the claim signature above (`?cluster=devnet`). No new transaction was submitted. Closeout did not submit a second claim transaction. Persisted `CLAIMED` state plus tests are the record of the claim; the refresh only confirmed the UI.
+
+## Closeout verification commands
+
+Commands run at closeout on parent `904ccacd18bb048500e0a4e45d2aa035538cfc27`. Tests were not weakened. No second claim transaction was submitted.
+
+| Command | Result |
+|---|---|
+| `npm test` (`vitest run`) | 19 files passed, **140** tests passed, 0 failed (exit 0) |
+| `cargo test --manifest-path programs/kickr_escrow/Cargo.toml --test deposits` | **15** passed, 0 failed, 0 ignored (exit 0) |
+| `cargo test --manifest-path programs/kickr_escrow/Cargo.toml --test settlement` | **5** passed, 0 failed, 0 ignored (exit 0). One pre-existing `dead_code` warning on `World.contest_id` in `tests/settlement.rs`; tests unchanged |
+| `npm run lint` (`eslint .`) | exit 0 |
+| `npm run typecheck` (`tsc --noEmit && tsc --noEmit -p app/tsconfig.json`) | exit 0 |
+| `npm run build` (`tsc -p tsconfig.build.json && vite build`) | exit 0 |
+
+Phase 6 documentation closeout stops here. Phase 7 was not started. The Solana program was not changed.
