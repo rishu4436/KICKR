@@ -1,7 +1,6 @@
 /**
- * Phase 1 service contracts only.
- * Nothing in this module starts a process, reads a sports feed, scores a
- * contest, settles a contest, or moves USDC.
+ * Service contracts. Phase 5 starts live ingest from api/main when configured.
+ * This module still does not settle contests or move USDC.
  *
  * The Solana escrow program does NOT exist in Phase 1.
  * Future escrow movement must never depend on a backend private key that can

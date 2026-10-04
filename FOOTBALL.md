@@ -96,3 +96,19 @@ The UI is served at `/` after `npm run build` (hash routes `#/`, `#/matches/:id`
 ## Sports data
 
 `SportsDataProvider` has `listMatches`, `getMatch`, `getSquad`, and `getEvents`. `local-dev` is a fixed fictional catalog. `unset` loads nothing. A real provider is not implemented and can be added behind the same port.
+
+
+## Phase 5 live scoring
+
+See `docs/LIVE_SCORING.md`. Canonical events remain in `match_events` (append-only). New columns: `correction_type`, `provider_version`, `raw_event_hash`. External ids map through `provider_id_map` plus existing `provider_id` / `external_fixture_id` columns.
+
+Added routes (authenticated):
+
+- `GET /matches/:id/live`
+- `GET /matches/:id/events`
+- `GET /matches/:id/leaderboard`
+- `GET /teams/:id/live-score`
+- `GET /matches/:id/live-stream` (SSE)
+- `GET /v1/diagnostics/live` (`READ_SYSTEM`)
+
+DEV_V1 remains `DEVELOPMENT`. It is not the production ruleset.

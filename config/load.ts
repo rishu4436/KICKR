@@ -25,6 +25,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     usdcMint: data.USDC_MINT,
     usdcDecimals: data.USDC_DECIMALS,
     sportsDataProvider: data.SPORTS_DATA_PROVIDER,
+    liveProviderConfigured:
+      data.SPORTS_PROVIDER === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim()),
   };
 
   assertPublicConfigShape(publicConfig);
@@ -52,6 +54,11 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
       sportsData: {
         provider: data.SPORTS_DATA_PROVIDER,
+        liveProvider: data.SPORTS_PROVIDER,
+        pollIntervalSeconds: data.SPORTS_POLL_INTERVAL,
+        requestTimeoutMs: data.SPORTS_REQUEST_TIMEOUT_MS,
+        liveProviderConfigured:
+          data.SPORTS_PROVIDER === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim()),
       },
       fantasy: {
         creditCap: data.FANTASY_CREDIT_CAP,
@@ -68,6 +75,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       databaseUrl: data.DATABASE_URL,
       redisUrl: data.REDIS_URL,
       solanaRpcUrl: data.SOLANA_RPC_URL,
+      sportsApiKey: data.SPORTS_API_KEY,
+      sportsApiUrl: data.SPORTS_API_URL,
     },
   };
 }

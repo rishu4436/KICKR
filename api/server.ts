@@ -17,6 +17,8 @@ import type { Clock } from "../shared/clock.js";
 import { loginRequestSchema, nonceRequestSchema } from "./schemas.js";
 import { registerFootballRoutes } from "./football.js";
 import { registerContestRoutes } from "./contests.js";
+import { registerLiveRoutes } from "./live.js";
+import type { LiveScoringService } from "../live/service.js";
 import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import { existsSync } from "node:fs";
@@ -36,6 +38,7 @@ export interface AppDeps {
   audit: AuditStore;
   football: FootballService;
   contests: ContestService;
+  live?: LiveScoringService;
   redis: RedisClient;
   clientDir?: string;
   logger: Logger;
@@ -106,12 +109,24 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.get("/health", (c) => {
-    return c.json({ ok: true, service: "kickr-api" });
+    return c.json({
+      ok: true,
+      service: "kickr-api",
+      LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
+    });
   });
 
   app.get("/ready", async (c) => {
     const redis = await checkRedisHealth(deps.redis);
-    return c.json({ ok: redis.ok, redis, service: "kickr-api" }, redis.ok ? 200 : 503);
+    return c.json(
+      {
+        ok: redis.ok,
+        redis,
+        service: "kickr-api",
+        LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
+      },
+      redis.ok ? 200 : 503,
+    );
   });
 
   app.get("/v1/config/public", (c) => {
@@ -185,6 +200,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   registerFootballRoutes(app, deps, (c) => authenticate(deps, c));
   registerContestRoutes(app, deps, (c) => authenticate(deps, c), (c, permission) => requirePermission(deps, c, permission));
+  registerLiveRoutes(
+    app,
+    deps,
+    (c) => authenticate(deps, c),
+    async (c, permission) => requirePermission(deps, c, permission),
+  );
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));

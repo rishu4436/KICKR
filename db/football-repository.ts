@@ -48,6 +48,34 @@ function asObject(value: unknown): Record<string, unknown> {
   throw new Error("Expected an object");
 }
 
+
+function mapEvent(row: Row): StoredMatchEvent {
+  const eventType = asString(row.event_type);
+  if (!isScoringEventType(eventType)) {
+    throw new Error("Unknown event type");
+  }
+  return {
+    eventId: asString(row.event_id),
+    matchId: asString(row.match_id),
+    provider: asString(row.provider),
+    providerEventId: asString(row.provider_event_id),
+    sequence: asInt(row.sequence),
+    timestamp: asDate(row.occurred_at).toISOString(),
+    matchMinute: row.match_minute === null || row.match_minute === undefined ? null : asInt(row.match_minute),
+    period: asNullableString(row.period),
+    eventType,
+    primaryPlayerId: asNullableString(row.primary_player_id),
+    secondaryPlayerId: asNullableString(row.secondary_player_id),
+    teamId: asNullableString(row.team_id),
+    metadata: asObject(row.metadata),
+    supersedesEventId: asNullableString(row.supersedes_event_id),
+    createdAt: asDate(row.created_at).toISOString(),
+    correctionType: asNullableString(row.correction_type) as StoredMatchEvent["correctionType"],
+    providerVersion: asNullableString(row.provider_version),
+    rawEventHash: asNullableString(row.raw_event_hash),
+  };
+}
+
 function mapMatch(row: Row): MatchRecord {
   return {
     id: asString(row.id),
@@ -284,33 +312,84 @@ export function createPgFootballStore(db: Queryable): FootballStore {
       const result = await db.query<Row>(
         `SELECT event_id, match_id, provider, provider_event_id, sequence, occurred_at,
                 match_minute, period, event_type, primary_player_id, secondary_player_id,
-                team_id, metadata, supersedes_event_id, created_at
+                team_id, metadata, supersedes_event_id, created_at,
+                correction_type, provider_version, raw_event_hash
          FROM match_events WHERE match_id = $1 ORDER BY sequence ASC`,
         [matchId],
       );
-      return result.rows.map((row) => {
-        const eventType = asString(row.event_type);
-        if (!isScoringEventType(eventType)) {
-          throw new Error("Unknown event type");
+      return result.rows.map((row) => mapEvent(row));
+    },
+    async insertEvent(event) {
+      try {
+        await db.query(
+          `INSERT INTO match_events (
+             event_id, match_id, provider, provider_event_id, sequence, occurred_at,
+             match_minute, period, event_type, primary_player_id, secondary_player_id,
+             team_id, metadata, supersedes_event_id, created_at,
+             correction_type, provider_version, raw_event_hash
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18)`,
+          [
+            event.eventId,
+            event.matchId,
+            event.provider,
+            event.providerEventId,
+            event.sequence,
+            event.timestamp,
+            event.matchMinute,
+            event.period,
+            event.eventType,
+            event.primaryPlayerId,
+            event.secondaryPlayerId,
+            event.teamId,
+            JSON.stringify(event.metadata),
+            event.supersedesEventId,
+            event.createdAt,
+            event.correctionType ?? null,
+            event.providerVersion ?? null,
+            event.rawEventHash ?? null,
+          ],
+        );
+        return "inserted";
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "";
+        if (code === "23505") {
+          return "duplicate";
         }
-        const event: StoredMatchEvent = {
-          eventId: asString(row.event_id),
+        throw error;
+      }
+    },
+    async findEventByProvider(provider, providerEventId) {
+      const result = await db.query<Row>(
+        `SELECT event_id, match_id, provider, provider_event_id, sequence, occurred_at,
+                match_minute, period, event_type, primary_player_id, secondary_player_id,
+                team_id, metadata, supersedes_event_id, created_at,
+                correction_type, provider_version, raw_event_hash
+         FROM match_events WHERE provider = $1 AND provider_event_id = $2`,
+        [provider, providerEventId],
+      );
+      const row = result.rows[0];
+      return row ? mapEvent(row) : null;
+    },
+    async listTeamsByMatch(matchId) {
+      const result = await db.query<Row>(
+        `SELECT id, account_id, match_id, status, created_at, updated_at
+         FROM fantasy_teams WHERE match_id = $1`,
+        [matchId],
+      );
+      return result.rows.map((row) => {
+        const status = asString(row.status);
+        if (status !== "DRAFT" && status !== "LOCKED") {
+          throw new Error("unknown team status");
+        }
+        const team: FantasyTeamRecord = {
+          id: asString(row.id),
+          accountId: asString(row.account_id),
           matchId: asString(row.match_id),
-          provider: asString(row.provider),
-          providerEventId: asString(row.provider_event_id),
-          sequence: asInt(row.sequence),
-          timestamp: asDate(row.occurred_at).toISOString(),
-          matchMinute: row.match_minute === null || row.match_minute === undefined ? null : asInt(row.match_minute),
-          period: asNullableString(row.period),
-          eventType,
-          primaryPlayerId: asNullableString(row.primary_player_id),
-          secondaryPlayerId: asNullableString(row.secondary_player_id),
-          teamId: asNullableString(row.team_id),
-          metadata: asObject(row.metadata),
-          supersedesEventId: asNullableString(row.supersedes_event_id),
+          status,
           createdAt: asDate(row.created_at).toISOString(),
+          updatedAt: asDate(row.updated_at).toISOString(),
         };
-        return event;
+        return team;
       });
     },
     async upsertCatalog(catalog: SportsCatalog) {

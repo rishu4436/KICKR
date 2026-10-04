@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 4: devnet contest deposits. No settlement and no mainnet mint.",
+  "description": "KICKR Phase 5: live scoring path. No settlement and no mainnet mint.",
   "type": "module",
   "engines": {
     "node": ">=20"

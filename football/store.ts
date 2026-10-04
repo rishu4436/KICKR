@@ -87,6 +87,9 @@ export interface StoredMatchEvent {
   metadata: Record<string, unknown>;
   supersedesEventId: string | null;
   createdAt: string;
+  correctionType?: "VAR_REVERSAL" | "PROVIDER_CORRECTION" | "SUPERSEDE" | null;
+  providerVersion?: string | null;
+  rawEventHash?: string | null;
 }
 
 export interface FootballStore {
@@ -103,6 +106,9 @@ export interface FootballStore {
   getVersionById(id: string): Promise<{ version: FantasyTeamVersionRecord; team: FantasyTeamRecord } | null>;
   insertVersion(version: FantasyTeamVersionRecord): Promise<void>;
   listEvents(matchId: string): Promise<StoredMatchEvent[]>;
+  insertEvent(event: StoredMatchEvent): Promise<"inserted" | "duplicate">;
+  findEventByProvider(provider: string, providerEventId: string): Promise<StoredMatchEvent | null>;
+  listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]>;
   upsertCatalog(catalog: SportsCatalog): Promise<void>;
 }
 
@@ -219,6 +225,28 @@ export class InMemoryFootballStore implements FootballStore {
 
   async listEvents(matchId: string): Promise<StoredMatchEvent[]> {
     return this.events.filter((event) => event.matchId === matchId).map((event) => clone(event));
+  }
+
+  async insertEvent(event: StoredMatchEvent): Promise<"inserted" | "duplicate"> {
+    const exists = this.events.some(
+      (row) => row.provider === event.provider && row.providerEventId === event.providerEventId,
+    );
+    if (exists) {
+      return "duplicate";
+    }
+    this.events.push(clone(event));
+    return "inserted";
+  }
+
+  async findEventByProvider(provider: string, providerEventId: string): Promise<StoredMatchEvent | null> {
+    const event = this.events.find(
+      (row) => row.provider === provider && row.providerEventId === providerEventId,
+    );
+    return event ? clone(event) : null;
+  }
+
+  async listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]> {
+    return [...this.teams.values()].filter((team) => team.matchId === matchId).map((team) => ({ ...team }));
   }
 }
 

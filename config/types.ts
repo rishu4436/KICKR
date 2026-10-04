@@ -20,6 +20,7 @@ export const PUBLIC_CONFIG_KEYS = [
   "usdcMint",
   "usdcDecimals",
   "sportsDataProvider",
+  "liveProviderConfigured",
 ] as const;
 
 export type PublicConfigKey = (typeof PUBLIC_CONFIG_KEYS)[number];
@@ -34,6 +35,8 @@ export interface PublicConfig {
   usdcMint: string;
   usdcDecimals: number;
   sportsDataProvider: string;
+  /** True only when SPORTS_PROVIDER=sportmonks and SPORTS_API_KEY is set. */
+  liveProviderConfigured: boolean;
 }
 
 export interface ServerConfig {
@@ -57,6 +60,10 @@ export interface ServerConfig {
   };
   sportsData: {
     provider: string;
+    liveProvider: string;
+    pollIntervalSeconds: number;
+    requestTimeoutMs: number;
+    liveProviderConfigured: boolean;
   };
   fantasy: {
     creditCap: number;
@@ -78,6 +85,9 @@ export interface SecretConfig {
   databaseUrl: string;
   redisUrl: string;
   solanaRpcUrl: string;
+  /** Sportmonks (or future) API key. Null when live provider is not configured. */
+  sportsApiKey: string | null;
+  sportsApiUrl: string;
 }
 
 export interface AppConfig {

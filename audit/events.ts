@@ -4,7 +4,7 @@
  * Phase 3 emits CONTEST_CREATED, CONTEST_FILLED, CONTEST_LOCKED, JOIN_QUOTED,
  * and ENTRY_RESERVED. Phase 4 emits DEPOSIT_SUBMITTED, DEPOSIT_VERIFIED,
  * DEPOSIT_REJECTED, and ENTRY_CONFIRMED only after finalized verification.
- * Other names stay constants until their flows exist.
+ * Phase 5 emits MATCH_EVENT_* and SCORE_RECOMPUTED on the live scoring path.
  */
 export const AUDIT_EVENTS = [
   "ACCOUNT_LOGIN",
@@ -20,6 +20,10 @@ export const AUDIT_EVENTS = [
   "ENTRY_CONFIRMED",
   "ENTRY_REFUNDED",
   "CONTEST_LOCKED",
+  "MATCH_EVENT_RECEIVED",
+  "MATCH_EVENT_NORMALIZED",
+  "MATCH_EVENT_REJECTED",
+  "MATCH_EVENT_CORRECTED",
   "SCORE_RECOMPUTED",
   "REVIEW_APPROVED",
   "REVIEW_REJECTED",

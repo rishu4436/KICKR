@@ -41,6 +41,7 @@ export function testConfig(overrides?: {
       usdcMint: "",
       usdcDecimals: 6,
       sportsDataProvider: "unset",
+      liveProviderConfigured: false,
     },
     server: {
       nodeEnv: "test",
@@ -58,7 +59,13 @@ export function testConfig(overrides?: {
         usdcMint: "",
         usdcDecimals: 6,
       },
-      sportsData: { provider: "unset" },
+      sportsData: {
+        provider: "unset",
+        liveProvider: "none",
+        pollIntervalSeconds: 15,
+        requestTimeoutMs: 8000,
+        liveProviderConfigured: false,
+      },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },
       contests: {
         reservationTtlSeconds: 600,
@@ -71,6 +78,8 @@ export function testConfig(overrides?: {
       databaseUrl: overrides?.databaseUrl ?? "postgres://kickr:supersecretpassword@localhost:5432/kickr",
       redisUrl: overrides?.redisUrl ?? "redis://:redis-secret-password@localhost:6379",
       solanaRpcUrl: overrides?.solanaRpcUrl ?? "https://rpc.example/?api-key=solana-secret-key",
+      sportsApiKey: null,
+      sportsApiUrl: "https://api.sportmonks.com/v3",
     },
   };
 }

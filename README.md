@@ -1,8 +1,8 @@
 # KICKR
 
-Solana-native fantasy football contest platform. This repository is **Phase 1 only**: the software foundation for accounts, sessions, RBAC, and audit.
+Solana-native fantasy football contest platform. This tree includes Phases 1–5 foundations through live scoring. Settlement and winner payouts are not implemented.
 
-The escrow program does **not** exist in Phase 1. There is no USDC transfer, sports feed, scoring engine, contest factory, settlement worker, or payout flow.
+Phase 5 adds Sportmonks live ingestion, append-only events, DEV_V1 live scores, Redis cache, SSE, and diagnostics. There is still no settlement worker or payout flow. See `docs/LIVE_SCORING.md`.
 
 Postgres is authoritative for accounts, sessions, RBAC assignments, and the audit log. Redis is a non-authoritative cache. Later, a Solana escrow program will be authoritative for USDC movement, and a sports provider will be authoritative for match events. Redis will never be authoritative for money.
 

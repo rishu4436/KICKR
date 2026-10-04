@@ -461,6 +461,50 @@ async function devDepositKeypair(): Promise<Keypair> {
 async function renderDetail(id: string): Promise<void> {
   const data = await api<{ match: MatchCard }>(`/matches/${id}`);
   const match = data.match;
+  let liveHtml: string;
+  try {
+    const live = await api<{
+      freshness: string;
+      eventCount: number;
+      providerName: string | null;
+      dataHealth: {
+        connected: boolean;
+        delayed: boolean;
+        lastEventAgeMs: number | null;
+        providerName: string | null;
+        eventCount: number;
+      };
+      playerScores: Array<{ playerId: string; baseMilliPoints: number }>;
+      timestamps: { updatedAt: string; lastEventAt: string | null };
+      scale: number;
+    }>(`/matches/${id}/live`);
+    const events = await api<{
+      events: Array<{
+        eventId: string;
+        eventType: string;
+        primaryPlayerId: string | null;
+        timestamp: string;
+        matchMinute: number | null;
+      }>;
+    }>(`/matches/${id}/events`);
+    const health = live.dataHealth;
+    liveHtml = `
+      <div class="card">
+        <div class="meta"><span>Live data</span><span>${live.freshness}</span></div>
+        <p class="quiet">
+          ${health.connected ? "Connected" : "Disconnected"}
+          · ${health.delayed ? "Delayed" : "On time"}
+          · provider ${health.providerName ?? "n/a"}
+          · events ${health.eventCount}
+          · last event age ${health.lastEventAgeMs === null ? "n/a" : `${Math.round(health.lastEventAgeMs / 1000)}s`}
+        </p>
+        <div id="live-feed" class="stack"></div>
+        <p class="note">Base player points are before captain/vice. Team contribution applies the multiplier once.</p>
+        <ul>${events.events.slice(-8).map((event) => `<li class="quiet">${event.matchMinute ?? "-"}' ${event.eventType} · player ${event.primaryPlayerId ?? "n/a"} · ${event.timestamp}</li>`).join("")}</ul>
+      </div>`;
+  } catch {
+    liveHtml = `<p class="quiet">No live score payload yet for this match.</p>`;
+  }
   app.innerHTML = shell(`${match.home.name} vs ${match.away.name}`, `
     <p class="quiet">${match.competition} · ${kickoffLabel(match.kickoffAt)} · ${match.status.replaceAll("_", " ")}${match.venue ? ` · ${match.venue}` : ""}</p>
     <div class="row">
@@ -468,6 +512,7 @@ async function renderDetail(id: string): Promise<void> {
       <button class="ghost" id="contests">Contests</button>
       <button class="primary" id="build" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI closed"}</button>
     </div>
+    ${liveHtml}
   `);
   document.querySelector("#contests")?.addEventListener("click", () => {
     location.hash = `#/matches/${id}/contests`;
@@ -477,6 +522,74 @@ async function renderDetail(id: string): Promise<void> {
       location.hash = `#/matches/${id}/xi`;
     }
   });
+  if (state.token && (match.bucket === "live" || match.status === "LIVE" || match.status === "FULL_TIME" || match.status === "DATA_FINALIZING")) {
+    const feed = document.querySelector("#live-feed");
+    // Prefer fetch streaming so the bearer token can be sent (EventSource cannot).
+    void attachLiveStream(id, feed);
+  }
+}
+
+async function attachLiveStream(matchId: string, feed: Element | null): Promise<void> {
+  if (!feed || !state.token) {
+    return;
+  }
+  try {
+    const response = await fetch(`/matches/${idPath(matchId)}/live-stream`, {
+      headers: { authorization: `Bearer ${state.token}` },
+    });
+    if (!response.ok || !response.body) {
+      feed.textContent = "Live channel unavailable.";
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() ?? "";
+      for (const chunk of chunks) {
+        const line = chunk.split("\n").find((row) => row.startsWith("data: "));
+        if (!line) {
+          continue;
+        }
+        const payload = JSON.parse(line.slice(6)) as {
+          type?: string;
+          eventType?: string;
+          playerId?: string | null;
+          timestamp?: string;
+          explanation?: {
+            event: string;
+            playerId: string | null;
+            basePoints: number;
+            multiplierLabel: string | null;
+            contribution: number;
+            newTeamTotal: number | null;
+          };
+        };
+        if (payload.type === "score_update" && payload.explanation) {
+          const item = document.createElement("div");
+          item.className = "quiet";
+          item.textContent = `${payload.explanation.event} · player ${payload.explanation.playerId ?? "n/a"} · base ${payload.explanation.basePoints} · ${payload.explanation.multiplierLabel ?? "no multiplier"} · contribution ${payload.explanation.contribution} · team ${payload.explanation.newTeamTotal ?? "n/a"} · ${payload.timestamp ?? ""}`;
+          feed.prepend(item);
+        }
+      }
+      if (location.hash !== `#/matches/${matchId}`) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    feed.textContent = "Live channel interrupted.";
+  }
+}
+
+function idPath(id: string): string {
+  return id;
 }
 
 async function renderBuilder(id: string): Promise<void> {

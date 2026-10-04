@@ -8,7 +8,10 @@ import { createPgContestStore } from "../db/contest-repository.js";
 import { FootballService } from "../football/service.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
-import { createSportsProvider } from "../sports/local-dev-provider.js";
+import { resolveSportsRuntime } from "../sports/factory.js";
+import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
+import { LiveScoringService } from "../live/service.js";
+import { createIngestWorker } from "../live/ingest.js";
 import path from "node:path";
 import { createIoredisClient } from "../redis/ioredis-client.js";
 import { createLogger } from "../shared/logger.js";
@@ -19,8 +22,8 @@ import { createApp } from "./server.js";
 
 /**
  * API process entrypoint.
- * Future services (indexer, scheduler, scoring, review, settlement, support,
- * monitoring) are not started here. See workers/contracts.ts.
+ * Phase 5 starts the live ingest worker only when LIVE_PROVIDER_CONFIGURED.
+ * Settlement, review, and payout workers remain contracts-only.
  */
 let config: ReturnType<typeof loadConfig>;
 try {
@@ -44,11 +47,61 @@ const auth = new AuthService(
 );
 
 const footballStore = createPgFootballStore(db);
-const sports = createSportsProvider(config.server.sportsData.provider);
+const sportsRuntime = resolveSportsRuntime({
+  dataProvider: config.server.sportsData.provider,
+  liveProvider: config.server.sportsData.liveProvider,
+  apiKey: config.secrets.sportsApiKey,
+  apiUrl: config.secrets.sportsApiUrl,
+  pollIntervalMs: config.server.sportsData.pollIntervalSeconds * 1000,
+  requestTimeoutMs: config.server.sportsData.requestTimeoutMs,
+  logger,
+});
+const sports = sportsRuntime.catalogProvider;
 if (sports?.developmentOnly) {
   await footballStore.upsertCatalog(sports.catalog());
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
+const idMap = new InMemoryProviderIdMap();
+if (sports?.developmentOnly) {
+  seedProviderIdMapFromCatalog(idMap, "local-dev", sports.catalog());
+}
+const live = new LiveScoringService(
+  footballStore,
+  football,
+  idMap,
+  redis,
+  config.public.environment,
+  createPgAuditStore(db),
+  sportsRuntime.liveConfigured
+    ? (sportsRuntime.liveProviderName ?? "sportmonks")
+    : sports?.name ?? "none",
+);
+live.metrics.setProvider(
+  sportsRuntime.liveProviderName,
+  sportsRuntime.liveConfigured,
+);
+const ingest = createIngestWorker(
+  sportsRuntime.liveAdapter?.client ?? null,
+  live.pipeline,
+  footballStore,
+  idMap,
+  live.metrics,
+  {
+    pollIntervalMs: sportsRuntime.pollIntervalMs,
+    maxRetries: 3,
+    backoffMs: 500,
+    logger,
+    clock: () => systemClock(),
+  },
+);
+if (sportsRuntime.liveConfigured) {
+  ingest.start();
+} else if (sportsRuntime.liveProviderName === "sportmonks") {
+  logger.warn(
+    { LIVE_PROVIDER_CONFIGURED: false, missing: "SPORTS_API_KEY" },
+    "sportmonks selected but unconfigured; live ingest will not start",
+  );
+}
 const contests = new ContestService(
   createPgContestStore(pool),
   football,
@@ -70,6 +123,7 @@ const app = createApp({
   audit: createPgAuditStore(db),
   football,
   contests,
+  live,
   clientDir: path.resolve(process.cwd(), "dist/client"),
   redis,
   logger,
@@ -85,6 +139,7 @@ const server = serve({ fetch: app.fetch, port: config.server.port }, (info) => {
 });
 
 async function shutdown(): Promise<void> {
+  ingest.stop();
   server.close();
   await redis.close();
   await pool.end();

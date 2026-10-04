@@ -5,7 +5,7 @@ import { assertDevCluster, DEFAULT_ESCROW_PROGRAM_ID, FORBIDDEN_MAINNET_USDC_MIN
 /**
  * Env schema. Required keys fail validation when missing or blank.
  * Local development uses placeholder URLs from .env.example, not production secrets.
- * There is no escrow private key, seed phrase, or sports API secret in this schema.
+ * There is no escrow private key or seed phrase in this schema. SPORTS_API_KEY is secret-classified when set.
  */
 
 const domainSchema = z
@@ -78,6 +78,15 @@ export const envSchema = z.object({
     z.coerce.number().int().min(0).max(9),
   ),
   SPORTS_DATA_PROVIDER: stringOrDefault("unset"),
+  // Live adapter. "sportmonks" requires SPORTS_API_KEY. Never silently fakes live data.
+  SPORTS_PROVIDER: stringOrDefault("none"),
+  SPORTS_API_KEY: z.preprocess(
+    (value) => (value === undefined || value === "" ? null : value),
+    z.union([z.null(), z.string().min(1)]),
+  ),
+  SPORTS_API_URL: stringOrDefault("https://api.sportmonks.com/v3"),
+  SPORTS_POLL_INTERVAL: intOrDefault(15),
+  SPORTS_REQUEST_TIMEOUT_MS: intOrDefault(8000),
   // TODO: 100 is a development default, not a confirmed production credit cap.
   FANTASY_CREDIT_CAP: intOrDefault(100),
   // Blank means the numeric per-club max is unset. Do not invent one.
