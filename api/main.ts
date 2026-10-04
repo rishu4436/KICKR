@@ -9,7 +9,9 @@ import { FootballService } from "../football/service.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { resolveSportsRuntime } from "../sports/factory.js";
-import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
+import { InMemoryProviderIdMap, loadProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
+import { createPgProviderIdMapRepository } from "../db/provider-id-map.js";
+import { createContestScoringSource } from "../live/contest-scoring-source.js";
 import { LiveScoringService } from "../live/service.js";
 import { createIngestWorker } from "../live/ingest.js";
 import path from "node:path";
@@ -61,8 +63,26 @@ if (sports?.developmentOnly) {
   await footballStore.upsertCatalog(sports.catalog());
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
+const contestStore = createPgContestStore(pool);
+const contests = new ContestService(
+  contestStore,
+  football,
+  createPgAuditStore(db),
+  new ContestDiscoveryCache(redis, config.public.environment),
+  config.server.contests,
+  {
+    programId: config.server.solana.escrowProgramId,
+    usdcMint: config.server.solana.usdcMint,
+    usdcDecimals: config.server.solana.usdcDecimals,
+    cluster: config.server.solana.cluster,
+  },
+);
 const idMap = new InMemoryProviderIdMap();
+// Authoritative production mappings from Postgres. Never invents domain rows.
+const providerIdMapRepo = createPgProviderIdMapRepository(db);
+loadProviderIdMap(idMap, await providerIdMapRepo.listAll());
 if (sports?.developmentOnly) {
+  // local-dev catalog seed remains an explicit development overlay.
   seedProviderIdMapFromCatalog(idMap, "local-dev", sports.catalog());
 }
 const live = new LiveScoringService(
@@ -75,6 +95,7 @@ const live = new LiveScoringService(
   sportsRuntime.liveConfigured
     ? (sportsRuntime.liveProviderName ?? "sportmonks")
     : sports?.name ?? "none",
+  createContestScoringSource(contestStore),
 );
 live.metrics.setProvider(
   sportsRuntime.liveProviderName,
@@ -102,19 +123,6 @@ if (sportsRuntime.liveConfigured) {
     "sportmonks selected but unconfigured; live ingest will not start",
   );
 }
-const contests = new ContestService(
-  createPgContestStore(pool),
-  football,
-  createPgAuditStore(db),
-  new ContestDiscoveryCache(redis, config.public.environment),
-  config.server.contests,
-  {
-    programId: config.server.solana.escrowProgramId,
-    usdcMint: config.server.solana.usdcMint,
-    usdcDecimals: config.server.solana.usdcDecimals,
-    cluster: config.server.solana.cluster,
-  },
-);
 
 const app = createApp({
   config,

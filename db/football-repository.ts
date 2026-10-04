@@ -392,6 +392,37 @@ export function createPgFootballStore(db: Queryable): FootballStore {
         return team;
       });
     },
+    async upsertSquadRow(row) {
+      await db.query(
+        `INSERT INTO match_squad (
+           id, match_id, player_id, club_id, fantasy_position, credit_value,
+           availability, starting_status, squad_status, provider_id, source_version, sourced_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (match_id, player_id) DO UPDATE SET
+           club_id = EXCLUDED.club_id,
+           fantasy_position = EXCLUDED.fantasy_position,
+           starting_status = EXCLUDED.starting_status,
+           squad_status = EXCLUDED.squad_status,
+           provider_id = EXCLUDED.provider_id,
+           source_version = EXCLUDED.source_version,
+           sourced_at = EXCLUDED.sourced_at,
+           updated_at = now()`,
+        [
+          row.id,
+          row.matchId,
+          row.playerId,
+          row.clubId,
+          row.fantasyPosition,
+          row.creditValue,
+          row.availability,
+          row.startingStatus,
+          row.squadStatus,
+          row.providerId,
+          row.sourceVersion,
+          row.sourcedAt,
+        ],
+      );
+    },
     async upsertCatalog(catalog: SportsCatalog) {
       for (const club of catalog.clubs) {
         await db.query(

@@ -1,6 +1,6 @@
 /**
  * Explicit provider → KICKR id resolution.
- * Never creates fake players. Unresolved mappings are recorded for diagnostics.
+ * Never creates fake players/clubs/fixtures. Unresolved mappings are diagnostics only.
  */
 
 export type ProviderEntityKind = "player" | "club" | "fixture";
@@ -16,6 +16,7 @@ export interface ProviderIdMap {
   get(provider: string, entityKind: ProviderEntityKind, externalId: string): string | null;
   set(mapping: ProviderIdMapping): void;
   list(): ProviderIdMapping[];
+  clear?(): void;
 }
 
 export class InMemoryProviderIdMap implements ProviderIdMap {
@@ -35,6 +36,10 @@ export class InMemoryProviderIdMap implements ProviderIdMap {
 
   list(): ProviderIdMapping[] {
     return [...this.rows.values()].map((row) => ({ ...row }));
+  }
+
+  clear(): void {
+    this.rows.clear();
   }
 }
 
@@ -61,5 +66,15 @@ export function seedProviderIdMapFromCatalog(
       externalId: match.externalFixtureId,
       kickrId: match.id,
     });
+  }
+}
+
+/** Load authoritative rows (e.g. from Postgres provider_id_map) into the runtime map. */
+export function loadProviderIdMap(
+  map: ProviderIdMap,
+  rows: readonly ProviderIdMapping[],
+): void {
+  for (const row of rows) {
+    map.set(row);
   }
 }

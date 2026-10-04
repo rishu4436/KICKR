@@ -1,12 +1,11 @@
 import type { AuditStore } from "../audit/types.js";
-import { DEV_V1_RULESET, DEV_V1_SCALE } from "../domain/scoring/dev-v1.js";
+import { DEV_V1_RULESET } from "../domain/scoring/dev-v1.js";
 import {
   calculatePlayerPoints,
   calculateTeamPoints,
   effectiveEvents,
   type ScoringEventInput,
 } from "../domain/scoring/engine.js";
-import type { ScoringEventType } from "../domain/scoring/events.js";
 import type {
   FantasyTeamRecord,
   FantasyTeamVersionRecord,
@@ -24,6 +23,8 @@ import type { LiveFreshness, LiveScoreCache, MatchLiveScoreCache, TeamLiveScoreC
 import type { LiveScoreHub, LiveScoreUpdate } from "./hub.js";
 import { derivePitchStates, eligibleForGoalConceded, type LineupSeed } from "./lineup.js";
 import type { LiveMetrics } from "./metrics.js";
+import { explainEventContribution } from "./contribution.js";
+import { computeFreshness } from "./freshness.js";
 
 export interface UnresolvedProviderEvent {
   id: string;
@@ -42,8 +43,25 @@ export interface LivePipelineStore extends FootballStore {
   insertEvent(event: StoredMatchEvent): Promise<"inserted" | "duplicate">;
   findEventByProvider(provider: string, providerEventId: string): Promise<StoredMatchEvent | null>;
   listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]>;
+  upsertSquadRow(row: SquadRecord): Promise<void>;
   recordUnresolved?(row: UnresolvedProviderEvent): Promise<void>;
   listUnresolved?(matchId?: string): Promise<UnresolvedProviderEvent[]>;
+}
+
+/**
+ * Contest scoring resolves contest_entries.team_version_id exactly.
+ * Never substitutes the fantasy team's latest version for an entry.
+ */
+export interface ContestScoringEntry {
+  entryId: string;
+  contestId: string;
+  wallet: string;
+  teamVersionId: string;
+  status: string;
+}
+
+export interface ContestScoringSource {
+  listEntriesForMatch(matchId: string): Promise<ContestScoringEntry[]>;
 }
 
 export interface AcceptEventResult {
@@ -58,9 +76,19 @@ export interface RecomputeResult {
   freshness: LiveFreshness;
   playerScores: Array<{ playerId: string; baseMilliPoints: number }>;
   teamScores: TeamLiveScoreCache[];
-  leaderboard: Array<{ teamId: string; accountId: string; milliPoints: number; rank: number }>;
+  leaderboard: Array<{
+    entryId: string;
+    contestId: string;
+    teamVersionId: string;
+    wallet: string;
+    milliPoints: number;
+    rank: number;
+  }>;
+  personalTeamScores: TeamLiveScoreCache[];
+  contestEntryScores: Array<TeamLiveScoreCache & { entryId: string; contestId: string; teamVersionId: string }>;
   eventCount: number;
   lastEventAt: string | null;
+  lastSuccessfulPollAt: string | null;
   goalConcededDiagnostics: Array<{
     eventId: string;
     eligiblePlayerIds: string[];
@@ -81,22 +109,6 @@ function toScoringInput(event: StoredMatchEvent): ScoringEventInput {
   };
 }
 
-function freshnessFor(match: MatchRecord, lastEventAt: string | null, now: Date): LiveFreshness {
-  if (match.status === "FINAL" || match.status === "DATA_FINALIZING") {
-    return "FINAL";
-  }
-  if (match.status === "LIVE" || match.status === "HALFTIME" || match.status === "FULL_TIME") {
-    if (lastEventAt) {
-      const age = now.getTime() - Date.parse(lastEventAt);
-      if (Number.isFinite(age) && age > 120_000) {
-        return "STALE";
-      }
-    }
-    return "LIVE";
-  }
-  return "LIVE";
-}
-
 export class LiveScoringPipeline {
   private readonly unresolved: UnresolvedProviderEvent[] = [];
 
@@ -108,6 +120,7 @@ export class LiveScoringPipeline {
     private readonly metrics: LiveMetrics,
     private readonly audit: AuditStore,
     private readonly providerName: string,
+    private readonly contestSource: ContestScoringSource | null = null,
   ) {}
 
   getUnresolved(): UnresolvedProviderEvent[] {
@@ -364,6 +377,9 @@ export class LiveScoringPipeline {
     }
     const events = await this.store.listEvents(matchId);
     const scoringEvents = events.map(toScoringInput);
+    const eventsBefore = triggerEvent
+      ? scoringEvents.filter((event) => event.eventId !== triggerEvent.eventId)
+      : scoringEvents;
     const players = await this.store.listPlayers();
     const squad = await this.store.listSquad(matchId);
     const playerById = new Map(players.map((player) => [player.id, player]));
@@ -403,7 +419,6 @@ export class LiveScoringPipeline {
       }
     }
     for (const player of players) {
-      // Ensure squad players appear even at zero after rebuild.
       if (squad.some((row) => row.playerId === player.id)) {
         affectedPlayerIds.add(player.id);
       }
@@ -420,11 +435,10 @@ export class LiveScoringPipeline {
       baseMilliPoints: calculatePlayerPoints(scoringEvents, playerId, DEV_V1_RULESET, matchContext, "player"),
     }));
 
-    const teams = await this.store.listTeamsByMatch(matchId);
-    const teamScores: TeamLiveScoreCache[] = [];
-    const updates: LiveScoreUpdate[] = [];
-
-    for (const team of teams) {
+    // Personal current-team scores (latest version) — not used for contest leaderboards.
+    const personalTeams = await this.store.listTeamsByMatch(matchId);
+    const personalTeamScores: TeamLiveScoreCache[] = [];
+    for (const team of personalTeams) {
       const versions = await this.store.listVersions(team.id);
       const latest = versions.at(-1);
       if (!latest) {
@@ -432,11 +446,7 @@ export class LiveScoringPipeline {
       }
       const scored = calculateTeamPoints(
         scoringEvents,
-        {
-          playerIds: latest.playerIds,
-          captainId: latest.captainId,
-          viceId: latest.viceId,
-        },
+        { playerIds: latest.playerIds, captainId: latest.captainId, viceId: latest.viceId },
         DEV_V1_RULESET,
         matchContext,
       );
@@ -458,24 +468,73 @@ export class LiveScoringPipeline {
         })),
         updatedAt: ctx.now.toISOString(),
       };
-      teamScores.push(cacheRow);
+      personalTeamScores.push(cacheRow);
       await this.cache.writeTeam(cacheRow);
+    }
 
-      if (triggerEvent?.primaryPlayerId && latest.playerIds.includes(triggerEvent.primaryPlayerId)) {
-        const row = cacheRow.players.find((player) => player.playerId === triggerEvent.primaryPlayerId);
-        const role = row?.role ?? "player";
-        const multiplier =
-          role === "captain"
-            ? DEV_V1_RULESET.captainMultiplier
-            : role === "vice"
-              ? DEV_V1_RULESET.viceMultiplier
-              : null;
-        const baseForEvent =
-          DEV_V1_RULESET.eventWeights[triggerEvent.eventType as ScoringEventType] ?? 0;
-        const contribution = row
-          ? row.milliPoints - (row.baseMilliPoints - baseForEvent === row.baseMilliPoints ? 0 : 0)
-          : 0;
-        void contribution;
+    // Contest entry scores: entry.team_version_id exactly. Never latest fantasy version.
+    const contestEntries = this.contestSource
+      ? await this.contestSource.listEntriesForMatch(matchId)
+      : [];
+    const contestEntryScores: RecomputeResult["contestEntryScores"] = [];
+    const updates: LiveScoreUpdate[] = [];
+
+    for (const entry of contestEntries) {
+      if (entry.status !== "PENDING" && entry.status !== "CONFIRMED") {
+        continue;
+      }
+      const owned = await this.store.getVersionById(entry.teamVersionId);
+      if (!owned) {
+        continue;
+      }
+      const version = owned.version;
+      // Defend against silent drift: score the frozen version id on the entry.
+      if (version.id !== entry.teamVersionId) {
+        throw new Error("contest entry team_version_id resolution mismatch");
+      }
+      const scored = calculateTeamPoints(
+        scoringEvents,
+        { playerIds: version.playerIds, captainId: version.captainId, viceId: version.viceId },
+        DEV_V1_RULESET,
+        matchContext,
+      );
+      const cacheRow: TeamLiveScoreCache & {
+        entryId: string;
+        contestId: string;
+        teamVersionId: string;
+      } = {
+        teamId: version.teamId,
+        matchId,
+        milliPoints: scored.milliPoints,
+        scale: scored.scale,
+        players: scored.players.map((player) => ({
+          playerId: player.playerId,
+          baseMilliPoints: player.baseMilliPoints,
+          milliPoints: player.milliPoints,
+          role:
+            player.playerId === version.captainId
+              ? "captain"
+              : player.playerId === version.viceId
+                ? "vice"
+                : "player",
+        })),
+        updatedAt: ctx.now.toISOString(),
+        entryId: entry.entryId,
+        contestId: entry.contestId,
+        teamVersionId: entry.teamVersionId,
+      };
+      contestEntryScores.push(cacheRow);
+
+      if (triggerEvent?.primaryPlayerId && version.playerIds.includes(triggerEvent.primaryPlayerId)) {
+        const explanation = explainEventContribution({
+          eventsBefore,
+          eventsAfter: scoringEvents,
+          trigger: toScoringInput(triggerEvent),
+          playerIds: version.playerIds,
+          captainId: version.captainId,
+          viceId: version.viceId,
+          matchContext,
+        });
         const update: LiveScoreUpdate = {
           type: "score_update",
           matchId,
@@ -483,19 +542,27 @@ export class LiveScoringPipeline {
           eventType: triggerEvent.eventType,
           playerId: triggerEvent.primaryPlayerId,
           timestamp: triggerEvent.timestamp,
-          baseMilliPoints: baseForEvent,
-          multiplier,
-          contributionMilliPoints: row?.milliPoints ?? 0,
-          teamId: team.id,
-          teamTotalMilliPoints: cacheRow.milliPoints,
+          baseMilliPoints: explanation.baseMilliPoints,
+          multiplier: explanation.multiplier,
+          contributionMilliPoints: explanation.contributionMilliPoints,
+          entryId: entry.entryId,
+          contestId: entry.contestId,
+          teamVersionId: entry.teamVersionId,
+          teamId: version.teamId,
+          previousPlayerTotalMilliPoints: explanation.previousPlayerTotalMilliPoints,
+          newPlayerTotalMilliPoints: explanation.newPlayerTotalMilliPoints,
+          previousTeamTotalMilliPoints: explanation.previousTeamTotalMilliPoints,
+          newTeamTotalMilliPoints: explanation.newTeamTotalMilliPoints,
           explanation: {
-            event: triggerEvent.eventType,
-            playerId: triggerEvent.primaryPlayerId,
-            basePoints: baseForEvent / DEV_V1_SCALE,
-            multiplierLabel:
-              role === "captain" ? "captain 2/1" : role === "vice" ? "vice 3/2" : null,
-            contribution: (row?.milliPoints ?? 0) / DEV_V1_SCALE,
-            newTeamTotal: cacheRow.milliPoints / DEV_V1_SCALE,
+            event: explanation.event,
+            playerId: explanation.playerId,
+            basePoints: explanation.basePoints,
+            multiplierLabel: explanation.multiplierLabel,
+            contribution: explanation.contribution,
+            previousPlayerTotal: explanation.previousPlayerTotal,
+            newPlayerTotal: explanation.newPlayerTotal,
+            previousTeamTotal: explanation.previousTeamTotal,
+            newTeamTotal: explanation.newTeamTotal,
           },
         };
         updates.push(update);
@@ -503,16 +570,18 @@ export class LiveScoringPipeline {
       }
     }
 
-    const leaderboard = teamScores
+    const leaderboard = contestEntryScores
       .map((row) => {
-        const team = teams.find((item) => item.id === row.teamId);
+        const entry = contestEntries.find((item) => item.entryId === row.entryId);
         return {
-          teamId: row.teamId,
-          accountId: team?.accountId ?? "",
+          entryId: row.entryId,
+          contestId: row.contestId,
+          teamVersionId: row.teamVersionId,
+          wallet: entry?.wallet ?? "",
           milliPoints: row.milliPoints,
         };
       })
-      .sort((a, b) => b.milliPoints - a.milliPoints || a.teamId.localeCompare(b.teamId))
+      .sort((a, b) => b.milliPoints - a.milliPoints || a.entryId.localeCompare(b.entryId))
       .map((row, index) => ({ ...row, rank: index + 1 }));
 
     const lastEventAt = events.reduce<string | null>((latest, event) => {
@@ -521,7 +590,13 @@ export class LiveScoringPipeline {
       }
       return latest;
     }, null);
-    const freshness = freshnessFor(match, lastEventAt, ctx.now);
+    const metricsSnap = this.metrics.snapshot();
+    const freshness = computeFreshness({
+      matchStatus: match.status,
+      now: ctx.now,
+      lastSuccessfulPollAt: metricsSnap.lastSuccessfulPollAt,
+      ingestionLagMs: metricsSnap.ingestionLagMs,
+    });
 
     const matchCache: MatchLiveScoreCache = {
       matchId,
@@ -539,8 +614,13 @@ export class LiveScoringPipeline {
     await this.cache.writeMatch(matchCache);
     await this.cache.writeLeaderboard({
       matchId,
-      contestId: null,
-      rows: leaderboard,
+      contestId: leaderboard[0]?.contestId ?? null,
+      rows: leaderboard.map((row) => ({
+        teamId: row.entryId,
+        accountId: row.wallet,
+        milliPoints: row.milliPoints,
+        rank: row.rank,
+      })),
       updatedAt: ctx.now.toISOString(),
       freshness,
     });
@@ -553,7 +633,8 @@ export class LiveScoringPipeline {
       entityId: matchId,
       metadata: {
         eventCount: events.length,
-        teamCount: teamScores.length,
+        personalTeamCount: personalTeamScores.length,
+        contestEntryCount: contestEntryScores.length,
         ruleset: DEV_V1_RULESET.name,
         triggerEventId: triggerEvent?.eventId ?? null,
       },
@@ -567,7 +648,10 @@ export class LiveScoringPipeline {
       matchId,
       connected: true,
       delayed: freshness === "STALE",
-      lastEventAgeMs: lastEventAt ? ctx.now.getTime() - Date.parse(lastEventAt) : null,
+      lastSuccessfulPollAgeMs: metricsSnap.lastSuccessfulPollAt
+        ? ctx.now.getTime() - Date.parse(metricsSnap.lastSuccessfulPollAt)
+        : null,
+      lastEventOccurrenceAt: lastEventAt,
       providerName: this.providerName,
       eventCount: events.length,
       freshness,
@@ -577,10 +661,13 @@ export class LiveScoringPipeline {
       matchId,
       freshness,
       playerScores,
-      teamScores,
+      teamScores: personalTeamScores,
+      personalTeamScores,
+      contestEntryScores,
       leaderboard,
       eventCount: events.length,
       lastEventAt,
+      lastSuccessfulPollAt: metricsSnap.lastSuccessfulPollAt,
       goalConcededDiagnostics,
       updates,
     };

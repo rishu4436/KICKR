@@ -215,6 +215,7 @@ export function buildReplayNormalizedDrafts(): Array<{
   externalFixtureId: string;
   sequence: number;
   timestamp: string;
+  timestampSource: "provider" | "kickoff_plus_minute";
   matchMinute: number | null;
   period: string | null;
   eventType: ScoringEventType;
@@ -222,6 +223,7 @@ export function buildReplayNormalizedDrafts(): Array<{
   secondaryExternalPlayerId: string | null;
   externalTeamId: string | null;
   correctionType: "VAR_REVERSAL" | null;
+  relatedProviderEventId: string | null;
   providerVersion: string | null;
   rawEventHash: string;
   metadata: Record<string, unknown>;
@@ -238,6 +240,7 @@ export function buildReplayNormalizedDrafts(): Array<{
     externalFixtureId: "dev-fixture-replay",
     sequence: event.sequence,
     timestamp: event.timestamp,
+    timestampSource: "kickoff_plus_minute" as const,
     matchMinute: event.matchMinute,
     period: event.period,
     eventType: event.eventType,
@@ -248,7 +251,8 @@ export function buildReplayNormalizedDrafts(): Array<{
       ? (players.get(event.secondaryPlayerId)?.providerId ?? null)
       : null,
     externalTeamId: event.teamId ? (clubs.get(event.teamId)?.providerId ?? null) : null,
-    correctionType: event.eventType === "VAR_REVERSAL" ? "VAR_REVERSAL" : null,
+    correctionType: event.eventType === "VAR_REVERSAL" ? ("VAR_REVERSAL" as const) : null,
+    relatedProviderEventId: event.eventType === "VAR_REVERSAL" ? "replay-evt-goal" : null,
     providerVersion: "local-dev-replay-1",
     rawEventHash: eventHash({ id: event.providerEventId, type: event.eventType }),
     metadata: { ...event.metadata },

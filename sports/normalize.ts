@@ -60,7 +60,9 @@ export interface NormalizedEventDraft {
   providerEventId: string;
   externalFixtureId: string;
   sequence: number;
+  /** Occurrence timestamp (provider exact or documented kickoff+minute fallback). */
   timestamp: string;
+  timestampSource: "provider" | "kickoff_plus_minute";
   matchMinute: number | null;
   period: string | null;
   eventType: ScoringEventType;
@@ -68,6 +70,8 @@ export interface NormalizedEventDraft {
   secondaryExternalPlayerId: string | null;
   externalTeamId: string | null;
   correctionType: "VAR_REVERSAL" | "PROVIDER_CORRECTION" | "SUPERSEDE" | null;
+  /** Explicit related provider event id when the payload establishes a correction link. */
+  relatedProviderEventId: string | null;
   providerVersion: string | null;
   rawEventHash: string;
   metadata: Record<string, unknown>;
@@ -124,6 +128,7 @@ export function normalizeSportmonksEvent(
   raw: RawProviderEvent,
   sequence: number,
   providerVersion: string | null = SPORTMONKS_API_VERSION,
+  kickoffAt: string | null = null,
 ): NormalizedEventDraft {
   const typeId = typeof raw.typeCode === "number" ? raw.typeCode : Number(raw.typeCode);
   const subTypeId =
@@ -139,10 +144,30 @@ export function normalizeSportmonksEvent(
   const primaryExternalPlayerId = asExternalId(raw.primaryExternalPlayerId);
   const secondaryExternalPlayerId = asExternalId(raw.secondaryExternalPlayerId);
   const minute = raw.minute ?? null;
-  const timestamp =
+  const providerTs =
     raw.occurredAt && !Number.isNaN(Date.parse(raw.occurredAt))
       ? new Date(raw.occurredAt).toISOString()
-      : new Date(0).toISOString();
+      : null;
+  // Sportmonks event objects do not reliably carry a per-event wall clock.
+  // Callers should pass kickoff via normalize options; default here keeps order only.
+  let timestamp = providerTs ?? new Date(0).toISOString();
+  let timestampSource: "provider" | "kickoff_plus_minute" = providerTs
+    ? "provider"
+    : "kickoff_plus_minute";
+  if (!providerTs && kickoffAt) {
+    const kickoffMs = Date.parse(kickoffAt);
+    const extra = raw.extraMinute ?? 0;
+    const minuteValue = minute ?? 0;
+    if (Number.isFinite(kickoffMs)) {
+      timestamp = new Date(kickoffMs + (minuteValue + extra) * 60_000).toISOString();
+      timestampSource = "kickoff_plus_minute";
+    }
+  }
+  const relatedProviderEventId = asExternalId(
+    (raw.raw.related_event_id as string | number | null | undefined) ??
+      (raw.raw.relatedEventId as string | number | null | undefined) ??
+      null,
+  );
 
   const draft: NormalizedEventDraft = {
     provider: "sportmonks",
@@ -150,6 +175,7 @@ export function normalizeSportmonksEvent(
     externalFixtureId: String(raw.externalFixtureId),
     sequence,
     timestamp,
+    timestampSource,
     matchMinute: minute,
     period: raw.period === null || raw.period === undefined ? null : String(raw.period),
     eventType: mapped.eventType,
@@ -157,6 +183,7 @@ export function normalizeSportmonksEvent(
     secondaryExternalPlayerId,
     externalTeamId: asExternalId(raw.externalTeamId),
     correctionType: mapped.correctionType,
+    relatedProviderEventId,
     providerVersion,
     rawEventHash: hashRawEvent(raw.raw),
     metadata: {
@@ -170,6 +197,8 @@ export function normalizeSportmonksEvent(
       extraMinute: raw.extraMinute ?? null,
       unknownProviderType: mapped.unknown,
       sortOrder: raw.sortOrder ?? null,
+      relatedProviderEventId,
+      timestampSource,
     },
     requiresPrimaryPlayer:
       mapped.eventType !== "SUBSTITUTION" &&

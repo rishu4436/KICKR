@@ -568,13 +568,16 @@ async function attachLiveStream(matchId: string, feed: Element | null): Promise<
             basePoints: number;
             multiplierLabel: string | null;
             contribution: number;
-            newTeamTotal: number | null;
+            previousPlayerTotal: number;
+            newPlayerTotal: number;
+            previousTeamTotal: number;
+            newTeamTotal: number;
           };
         };
         if (payload.type === "score_update" && payload.explanation) {
           const item = document.createElement("div");
           item.className = "quiet";
-          item.textContent = `${payload.explanation.event} · player ${payload.explanation.playerId ?? "n/a"} · base ${payload.explanation.basePoints} · ${payload.explanation.multiplierLabel ?? "no multiplier"} · contribution ${payload.explanation.contribution} · team ${payload.explanation.newTeamTotal ?? "n/a"} · ${payload.timestamp ?? ""}`;
+          item.textContent = `${payload.explanation.event} · player ${payload.explanation.playerId ?? "n/a"} · base ${payload.explanation.basePoints} · ${payload.explanation.multiplierLabel ?? "no multiplier"} · contribution ${payload.explanation.contribution} · player ${payload.explanation.previousPlayerTotal}→${payload.explanation.newPlayerTotal} · team ${payload.explanation.previousTeamTotal}→${payload.explanation.newTeamTotal} · ${payload.timestamp ?? ""}`;
           feed.prepend(item);
         }
       }

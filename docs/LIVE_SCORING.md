@@ -29,3 +29,14 @@
 provider response → validate/normalize → dedupe (`provider` + `provider_event_id`) → append-only `match_events` → DEV_V1 recompute from log → Redis live cache → REST + SSE → UI
 
 Postgres/event log remains authoritative. Redis is cache-only and rebuildable.
+
+
+## Phase 5.1 correctness
+
+- Production `provider_id_map` rows are loaded from Postgres at API startup.
+- Contest live scores / leaderboards resolve `contest_entries.team_version_id` exactly.
+- SSE contribution = event base × captain/vice multiplier (not accumulated player total).
+- Sportmonks lineups sync into `match_squad` when mapped; unresolved lineup players are diagnostics only.
+- Freshness uses last successful poll / ingest lag, not kickoff age. Occurrence timestamps use provider time or documented `kickoff + minute` fallback.
+- VAR/corrections require an explicit related provider event id to supersede; otherwise the correction fact is stored unresolved.
+- Approved result snapshots are the Phase 6 settlement input boundary. Settlement is not implemented.

@@ -12,16 +12,26 @@ export interface LiveScoreUpdate {
   timestamp: string;
   baseMilliPoints: number;
   multiplier: { numerator: number; denominator: number } | null;
+  /** Event-only contribution after role multiplier. Never the accumulated player total. */
   contributionMilliPoints: number;
+  entryId: string | null;
+  contestId: string | null;
+  teamVersionId: string | null;
   teamId: string | null;
-  teamTotalMilliPoints: number | null;
+  previousPlayerTotalMilliPoints: number;
+  newPlayerTotalMilliPoints: number;
+  previousTeamTotalMilliPoints: number;
+  newTeamTotalMilliPoints: number;
   explanation: {
     event: string;
     playerId: string | null;
     basePoints: number;
     multiplierLabel: string | null;
     contribution: number;
-    newTeamTotal: number | null;
+    previousPlayerTotal: number;
+    newPlayerTotal: number;
+    previousTeamTotal: number;
+    newTeamTotal: number;
   };
 }
 
@@ -30,7 +40,8 @@ export interface LiveHealthUpdate {
   matchId: string;
   connected: boolean;
   delayed: boolean;
-  lastEventAgeMs: number | null;
+  lastSuccessfulPollAgeMs: number | null;
+  lastEventOccurrenceAt: string | null;
   providerName: string | null;
   eventCount: number;
   freshness: string;

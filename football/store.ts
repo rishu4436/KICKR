@@ -109,6 +109,7 @@ export interface FootballStore {
   insertEvent(event: StoredMatchEvent): Promise<"inserted" | "duplicate">;
   findEventByProvider(provider: string, providerEventId: string): Promise<StoredMatchEvent | null>;
   listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]>;
+  upsertSquadRow(row: SquadRecord): Promise<void>;
   upsertCatalog(catalog: SportsCatalog): Promise<void>;
 }
 
@@ -247,6 +248,17 @@ export class InMemoryFootballStore implements FootballStore {
 
   async listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]> {
     return [...this.teams.values()].filter((team) => team.matchId === matchId).map((team) => ({ ...team }));
+  }
+
+  async upsertSquadRow(row: SquadRecord): Promise<void> {
+    const index = this.squad.findIndex(
+      (item) => item.matchId === row.matchId && item.playerId === row.playerId,
+    );
+    if (index >= 0) {
+      this.squad[index] = clone(row);
+    } else {
+      this.squad.push(clone(row));
+    }
   }
 }
 

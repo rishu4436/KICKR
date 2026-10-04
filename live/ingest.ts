@@ -6,12 +6,12 @@ import {
   sportmonksFixtureToRawEvents,
   type NormalizedEventDraft,
 } from "../sports/normalize.js";
-import type { LiveScoringPipeline } from "./pipeline.js";
+import type { LiveScoringPipeline, LivePipelineStore } from "./pipeline.js";
 import type { LiveMetrics } from "./metrics.js";
 import { transition } from "../domain/state-machine.js";
 import type { MatchState } from "../domain/state-machine.js";
-import type { LivePipelineStore } from "./pipeline.js";
 import type { ProviderIdMap } from "../sports/id-map.js";
+import { extractSportmonksLineups, syncProviderLineups } from "./lineup-sync.js";
 
 /**
  * Polling ingestion worker. Idempotent. Bounded retries, timeout via client,
@@ -36,6 +36,12 @@ export interface IngestWorker {
     ctx: RequestContext,
   ): Promise<void>;
   applyProviderFinal(matchId: string, ctx: RequestContext): Promise<MatchState[]>;
+  syncLineupsForFixture(
+    matchId: string,
+    externalFixtureId: string,
+    fixture: Record<string, unknown>,
+    ctx: RequestContext,
+  ): Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -53,6 +59,47 @@ export function createIngestWorker(
   let timer: NodeJS.Timeout | null = null;
   let stopped = true;
   let inFlight = false;
+
+  async function syncLineupsForFixture(
+    matchId: string,
+    externalFixtureId: string,
+    fixture: Record<string, unknown>,
+    ctx: RequestContext,
+  ): Promise<void> {
+    const rows = extractSportmonksLineups(fixture);
+    const existingSquad = await store.listSquad(matchId);
+    const players = await store.listPlayers();
+    const synced = syncProviderLineups({
+      provider: "sportmonks",
+      matchId,
+      externalFixtureId,
+      rows,
+      idMap,
+      existingSquad,
+      players,
+      nowIso: ctx.now.toISOString(),
+    });
+    for (const row of synced.upserts) {
+      await store.upsertSquadRow(row);
+    }
+    for (const unresolved of synced.unresolved) {
+      metrics.recordUnresolvedPlayer();
+      if (store.recordUnresolved) {
+        await store.recordUnresolved({
+          id: unresolved.id,
+          provider: unresolved.provider,
+          providerEventId: `lineup:${unresolved.externalPlayerId}`,
+          matchId: unresolved.matchId,
+          externalFixtureId: unresolved.externalFixtureId,
+          externalPlayerId: unresolved.externalPlayerId,
+          externalTeamId: unresolved.externalTeamId,
+          reason: unresolved.reason,
+          rawPayload: unresolved.rawPayload,
+          createdAt: unresolved.createdAt,
+        });
+      }
+    }
+  }
 
   async function pollOnce(): Promise<void> {
     if (inFlight) {
@@ -94,37 +141,58 @@ export function createIngestWorker(
       }
       metrics.recordLatency(Date.now() - started);
       const fixtures = extractFixtures(payload);
-      let latestEventAge: number | null = null;
+      const latestIngestLag: number | null = 0;
       for (const fixture of fixtures) {
         const fixtureId = String(fixture.id ?? "");
         const matchId = idMap.get("sportmonks", "fixture", fixtureId);
         if (!matchId) {
+          metrics.recordUnresolvedPlayer();
+          if (store.recordUnresolved) {
+            await store.recordUnresolved({
+              id: crypto.randomUUID(),
+              provider: "sportmonks",
+              providerEventId: `fixture:${fixtureId}`,
+              matchId: null,
+              externalFixtureId: fixtureId,
+              externalPlayerId: null,
+              externalTeamId: null,
+              reason: "unresolved_fixture",
+              rawPayload: fixture,
+              createdAt: ctx.now.toISOString(),
+            });
+          }
           continue;
         }
+        await syncLineupsForFixture(matchId, fixtureId, fixture, ctx);
+        const kickoffAt =
+          typeof fixture.starting_at === "string" ? fixture.starting_at : null;
         const rawEvents = sportmonksFixtureToRawEvents({
           id: fixtureId,
           events: Array.isArray(fixture.events) ? (fixture.events as Array<Record<string, unknown>>) : [],
           timeline: Array.isArray(fixture.timeline)
             ? (fixture.timeline as Array<Record<string, unknown>>)
             : [],
-          starting_at: typeof fixture.starting_at === "string" ? fixture.starting_at : undefined,
+          starting_at: kickoffAt ?? undefined,
         });
-        const drafts = rawEvents.map((raw, index) => normalizeSportmonksEvent(raw, index + 1));
+        const drafts = rawEvents.map((raw, index) =>
+          normalizeSportmonksEvent(raw, index + 1, "v3", kickoffAt),
+        );
+        for (const draft of drafts) {
+          draft.metadata = {
+            ...draft.metadata,
+            providerPolledAt: ctx.now.toISOString(),
+            ingestedAt: ctx.now.toISOString(),
+          };
+        }
         await ingestNormalizedDrafts(drafts, matchId, ctx);
 
         const stateId = fixture.state_id;
         if (isProviderFinal(stateId)) {
           await applyProviderFinal(matchId, ctx);
         }
-        const last = drafts.at(-1);
-        if (last?.timestamp) {
-          const age = ctx.now.getTime() - Date.parse(last.timestamp);
-          if (Number.isFinite(age)) {
-            latestEventAge = latestEventAge === null ? age : Math.min(latestEventAge, age);
-          }
-        }
       }
-      metrics.recordPollSuccess(ctx.now, latestEventAge);
+      // Ingest lag is poll health, not kickoff age.
+      metrics.recordPollSuccess(ctx.now, latestIngestLag);
     } finally {
       inFlight = false;
     }
@@ -135,7 +203,6 @@ export function createIngestWorker(
     matchId: string,
     ctx: RequestContext,
   ): Promise<void> {
-    // Order by sequence/minute but accept late/out-of-order arrivals without rewriting history.
     const ordered = drafts.slice().sort((a, b) => {
       const minuteA = a.matchMinute ?? 0;
       const minuteB = b.matchMinute ?? 0;
@@ -143,27 +210,41 @@ export function createIngestWorker(
     });
     for (const draft of ordered) {
       let supersedes: string | null = null;
-      if (draft.eventType === "VAR_REVERSAL") {
-        supersedes = await findGoalToReverse(matchId, draft);
+      let unresolvedCorrection = false;
+      if (draft.eventType === "VAR_REVERSAL" || draft.correctionType === "VAR_REVERSAL") {
+        const linked = await resolveCorrectionTarget(matchId, draft);
+        supersedes = linked.supersedesEventId;
+        unresolvedCorrection = linked.unresolved;
       }
-      await pipeline.acceptNormalized(
+      const result = await pipeline.acceptNormalized(
         { ...draft, sequence: draft.sequence },
         { matchId, supersedesEventId: supersedes, ctx },
       );
+      if (unresolvedCorrection && result.event) {
+        // Correction fact is stored; no silent reverse of an arbitrary goal.
+        metrics.recordUnresolvedPlayer();
+      }
     }
   }
 
-  async function findGoalToReverse(matchId: string, draft: NormalizedEventDraft): Promise<string | null> {
-    const events = await store.listEvents(matchId);
-    const playerId = draft.primaryExternalPlayerId
-      ? idMap.get(draft.provider, "player", draft.primaryExternalPlayerId)
-      : null;
-    const goal = events
-      .filter((event) => event.eventType === "GOAL")
-      .filter((event) => !events.some((other) => other.supersedesEventId === event.eventId))
-      .filter((event) => (playerId ? event.primaryPlayerId === playerId : true))
-      .sort((a, b) => b.sequence - a.sequence)[0];
-    return goal?.eventId ?? null;
+  /**
+   * Prefer explicit related provider event ids. Never blindly reverse the latest
+   * goal by the same player when the payload does not establish the link.
+   */
+  async function resolveCorrectionTarget(
+    _matchId: string,
+    draft: NormalizedEventDraft,
+  ): Promise<{ supersedesEventId: string | null; unresolved: boolean }> {
+    void _matchId;
+    if (draft.relatedProviderEventId) {
+      const related = await store.findEventByProvider(draft.provider, draft.relatedProviderEventId);
+      if (related) {
+        return { supersedesEventId: related.eventId, unresolved: false };
+      }
+      return { supersedesEventId: null, unresolved: true };
+    }
+    // No safe link established by the provider payload.
+    return { supersedesEventId: null, unresolved: true };
   }
 
   async function applyProviderFinal(matchId: string, ctx: RequestContext): Promise<MatchState[]> {
@@ -173,7 +254,6 @@ export function createIngestWorker(
     }
     const applied: MatchState[] = [];
     let status = match.status;
-    // LIVE → FULL_TIME → DATA_FINALIZING. Do not settle. Do not force FINAL here.
     const path: MatchState[] = [];
     if (status === "LIVE" || status === "HALFTIME") {
       path.push("FULL_TIME", "DATA_FINALIZING");
@@ -202,6 +282,7 @@ export function createIngestWorker(
     },
     ingestNormalizedDrafts,
     applyProviderFinal,
+    syncLineupsForFixture,
     start() {
       if (!stopped) {
         return;
@@ -241,6 +322,5 @@ function extractFixtures(payload: unknown): Array<Record<string, unknown>> {
 }
 
 function isProviderFinal(stateId: unknown): boolean {
-  // Sportmonks FT / AET / FT_PEN common state ids include 5 (FT). Keep conservative.
   return stateId === 5 || stateId === 7 || stateId === 8;
 }

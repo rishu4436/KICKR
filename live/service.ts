@@ -6,7 +6,7 @@ import type { ProviderIdMap } from "../sports/id-map.js";
 import { LiveScoreCache } from "./cache.js";
 import { LiveScoreHub } from "./hub.js";
 import { LiveMetrics } from "./metrics.js";
-import { LiveScoringPipeline, type LivePipelineStore } from "./pipeline.js";
+import { LiveScoringPipeline, type ContestScoringSource, type LivePipelineStore } from "./pipeline.js";
 import { DEV_V1_RULESET, DEV_V1_SCALE } from "../domain/scoring/dev-v1.js";
 import { derivePitchStates, type LineupSeed } from "./lineup.js";
 
@@ -24,6 +24,7 @@ export class LiveScoringService {
     env: string,
     audit: AuditStore,
     providerName: string,
+    contestSource: ContestScoringSource | null = null,
   ) {
     this.cache = new LiveScoreCache(redis, env);
     this.hub = new LiveScoreHub();
@@ -37,6 +38,7 @@ export class LiveScoringService {
       this.metrics,
       audit,
       providerName,
+      contestSource,
     );
   }
 
@@ -139,12 +141,26 @@ export class LiveScoringService {
       return null;
     }
     let board = await this.cache.readLeaderboard(matchId);
+    let entryLeaderboard: Array<{
+      entryId: string;
+      contestId: string;
+      teamVersionId: string;
+      wallet: string;
+      milliPoints: number;
+      rank: number;
+    }> | null = null;
     if (!board) {
       const rebuilt = await this.pipeline.rebuildFromEvents(matchId, ctx);
+      entryLeaderboard = rebuilt.leaderboard;
       board = {
         matchId,
-        contestId: null,
-        rows: rebuilt.leaderboard,
+        contestId: rebuilt.leaderboard[0]?.contestId ?? null,
+        rows: rebuilt.leaderboard.map((row) => ({
+          teamId: row.entryId,
+          accountId: row.wallet,
+          milliPoints: row.milliPoints,
+          rank: row.rank,
+        })),
         updatedAt: ctx.now.toISOString(),
         freshness: rebuilt.freshness,
       };
@@ -154,7 +170,15 @@ export class LiveScoringService {
       freshness: board.freshness,
       timestamps: { updatedAt: board.updatedAt },
       scale: DEV_V1_SCALE,
-      leaderboard: board.rows,
+      leaderboard: entryLeaderboard ?? board.rows.map((row) => ({
+        entryId: row.teamId,
+        contestId: board?.contestId ?? "",
+        teamVersionId: "",
+        wallet: row.accountId,
+        milliPoints: row.milliPoints,
+        rank: row.rank,
+      })),
+      note: "Contest leaderboard rows are keyed by contest entry and frozen team_version_id, not fantasy team latest.",
     };
   }
 
@@ -197,7 +221,8 @@ export class LiveScoringService {
         contributionDisplayed: player.milliPoints / DEV_V1_SCALE,
       })),
       explanationNote:
-        "baseMilliPoints are raw player points. teamContributionMilliPoints apply captain 2/1 or vice 3/2 once.",
+        "Personal current-team score uses the latest fantasy team version. Contest entry scores use contest_entries.team_version_id and never silently switch to a newer version.",
+      scoreKind: "personal_current_team",
     };
   }
 }
