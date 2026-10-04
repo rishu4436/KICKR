@@ -8,12 +8,13 @@ export class AppError extends Error {
   readonly status: number;
   readonly expose: boolean;
   readonly fields: readonly string[] | undefined;
+  readonly details: unknown;
 
   constructor(
     code: string,
     status: number,
     message: string,
-    options?: { expose?: boolean; fields?: readonly string[] },
+    options?: { expose?: boolean; fields?: readonly string[]; details?: unknown },
   ) {
     super(message);
     this.name = "AppError";
@@ -21,6 +22,7 @@ export class AppError extends Error {
     this.status = status;
     this.expose = options?.expose ?? status < 500;
     this.fields = options?.fields;
+    this.details = options?.details;
   }
 }
 
@@ -55,6 +57,7 @@ export interface PublicErrorBody {
     message: string;
     correlationId: string;
     fields?: readonly string[];
+    details?: unknown;
   };
 }
 
@@ -79,6 +82,9 @@ export function toPublicError(
     };
     if (!hide && err.fields && err.fields.length > 0) {
       body.error.fields = err.fields;
+    }
+    if (!hide && err.details !== undefined) {
+      body.error.details = err.details;
     }
     return { status: hide ? 500 : err.status, body };
   }

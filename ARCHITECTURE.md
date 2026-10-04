@@ -95,3 +95,12 @@ Legal edges in Phase 1:
 - Auth rate-limit numbers are temporary infrastructure defaults, not a contest policy.
 - Trusted-proxy handling for client IP is unspecified.
 - Per-event audit metadata keys are unspecified beyond "metadata is a JSON object".
+
+
+## Phase 2 football slice
+
+Matches, squads, fantasy teams, and DEV_V1 scoring sit on the Phase 1 account, auth, and audit foundation. See `FOOTBALL.md`.
+
+Postgres remains authoritative for these new tables. Redis is still not authoritative for money or for XI history. The escrow program still does not exist. Squad credits are not USDC.
+
+USDC leaves a contest escrow only through a program instruction whose inputs were already written to the entry table and the approved snapshot. The backend decides the list. The program makes the list true. Support can show both records. Support cannot replace either one.

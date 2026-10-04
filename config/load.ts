@@ -47,6 +47,10 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       sportsData: {
         provider: data.SPORTS_DATA_PROVIDER,
       },
+      fantasy: {
+        creditCap: data.FANTASY_CREDIT_CAP,
+        maxPlayersFromOneTeam: data.FANTASY_MAX_PLAYERS_FROM_ONE_TEAM,
+      },
     },
     secrets: {
       databaseUrl: data.DATABASE_URL,

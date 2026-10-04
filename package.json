@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 1 foundation: wallet accounts, sessions, RBAC, and append-only audit.",
+  "description": "KICKR Phase 2: football domain, XI builder, and a development scoring ruleset.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -11,9 +11,9 @@
     "dev": "tsx api/main.ts",
     "start": "node dist/api/main.js",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p app/tsconfig.json",
     "test": "vitest run",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && vite build",
     "db:migrate": "tsx db/migrate-cli.ts"
   },
   "dependencies": {
@@ -33,6 +33,7 @@
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.0",
+    "vite": "^6.4.3",
     "vitest": "^3.2.7"
   }
 }

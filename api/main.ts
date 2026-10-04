@@ -3,6 +3,10 @@ import { AuthService } from "../auth/service.js";
 import { loadConfig } from "../config/load.js";
 import { createPgAuditStore, createPgAccountRepository, createPgGrantRepository, createPgNonceRepository, createPgSessionRepository } from "../db/repositories.js";
 import { asQueryable, createPool } from "../db/pool.js";
+import { createPgFootballStore } from "../db/football-repository.js";
+import { FootballService } from "../football/service.js";
+import { createSportsProvider } from "../sports/local-dev-provider.js";
+import path from "node:path";
 import { createIoredisClient } from "../redis/ioredis-client.js";
 import { createLogger } from "../shared/logger.js";
 import { InMemoryRateLimiter } from "../shared/rate-limit.js";
@@ -36,11 +40,20 @@ const auth = new AuthService(
   config.server.auth,
 );
 
+const footballStore = createPgFootballStore(db);
+const sports = createSportsProvider(config.server.sportsData.provider);
+if (sports?.developmentOnly) {
+  await footballStore.upsertCatalog(sports.catalog());
+}
+const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
+
 const app = createApp({
   config,
   auth,
   grants: createPgGrantRepository(db),
   audit: createPgAuditStore(db),
+  football,
+  clientDir: path.resolve(process.cwd(), "dist/client"),
   redis,
   logger,
   clock: systemClock,

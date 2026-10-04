@@ -43,3 +43,8 @@ Set `NODE_ENV=production` for generic 500 messages. Stack traces are not include
 ## Phase boundary
 
 Do not add escrow instructions, USDC transfers, scoring, sports ingestion, settlement, or payout code to this phase. Add a documented TODO when a business rule is still undefined.
+
+
+## Phase 2 UI
+
+`npm run build` compiles the API and the Vite client into `dist/client`. `npm start` or `npm run dev` serves `/` from that folder when it exists. Set `SPORTS_DATA_PROVIDER=local-dev` and run migrations through `002` to load the fictional catalog. Sign-in on the page uses a development keypair, not a production wallet.

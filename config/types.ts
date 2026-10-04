@@ -48,6 +48,11 @@ export interface ServerConfig {
   sportsData: {
     provider: string;
   };
+  fantasy: {
+    creditCap: number;
+    /** null: numeric max is not configured. TODO. */
+    maxPlayersFromOneTeam: number | null;
+  };
 }
 
 export interface SecretConfig {

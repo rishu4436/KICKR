@@ -9,3 +9,6 @@ Postgres is authoritative for accounts, sessions, RBAC assignments, and the audi
 USDC leaves a contest escrow only through a program instruction whose inputs were already written to the entry table and the approved snapshot. The backend decides the list. The program makes the list true. Support can show both records. Support cannot replace either one.
 
 See `ARCHITECTURE.md`, `SECURITY.md`, `RBAC.md`, `AUDIT.md`, and `DEVELOPMENT.md`.
+
+
+Phase 2 adds the football slice: match list, squad, and XI builder, plus a development-only scoring ruleset. It does not add contests or USDC. See `FOOTBALL.md`. Squad credits are not USDC. The escrow program still does not exist.

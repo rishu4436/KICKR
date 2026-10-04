@@ -1,7 +1,7 @@
 /**
- * Audit event names. Phase 1 only emits ACCOUNT_LOGIN and ACCOUNT_LOGOUT.
- * The other names are constants for later phases. Emitting them from
- * unimplemented business flows is intentionally not wired.
+ * Audit event names. Phase 1 emits ACCOUNT_LOGIN and ACCOUNT_LOGOUT.
+ * Phase 2 also emits TEAM_SAVED when a fantasy team version is stored.
+ * Other names stay constants until their flows exist.
  */
 export const AUDIT_EVENTS = [
   "ACCOUNT_LOGIN",

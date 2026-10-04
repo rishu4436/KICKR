@@ -47,6 +47,13 @@ export const envSchema = z.object({
   SOLANA_CLUSTER: stringOrDefault("devnet"),
   SOLANA_RPC_URL: stringOrDefault("https://api.devnet.solana.com"),
   SPORTS_DATA_PROVIDER: stringOrDefault("unset"),
+  // TODO: 100 is a development default, not a confirmed production credit cap.
+  FANTASY_CREDIT_CAP: intOrDefault(100),
+  // Blank means the numeric per-club max is unset. Do not invent one.
+  FANTASY_MAX_PLAYERS_FROM_ONE_TEAM: z.preprocess(
+    (value) => (value === undefined || value === "" ? null : value),
+    z.union([z.null(), z.coerce.number().int().positive()]),
+  ),
 });
 
 export type ParsedEnv = z.infer<typeof envSchema>;
