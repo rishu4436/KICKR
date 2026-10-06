@@ -22,6 +22,7 @@ export interface OpsReadDeps {
   liveProviderConfigured: boolean;
   providerName: string;
   cluster: string;
+  counters?: Record<string, number> | null;
 }
 
 type Gate = ReadonlySet<Permission>;
@@ -240,7 +241,15 @@ function diagnosticsSnapshot(deps: OpsReadDeps, _now: Date) {
 }
 
 export async function buildDiagnostics(deps: OpsReadDeps, now: Date) {
-  return { generatedAt: now.toISOString(), ...diagnosticsSnapshot(deps, now), featureFlags: { available: false as const, reason: "no_flag_store" } };
+  return {
+    generatedAt: now.toISOString(),
+    ...diagnosticsSnapshot(deps, now),
+    counters: deps.counters ?? null,
+    dependencies: {
+      note: "Process liveness is /health. Readiness is /ready. A provider blip is dependency health, not process death.",
+    },
+    featureFlags: { available: false as const, reason: "no_flag_store" },
+  };
 }
 
 export async function buildProviderConfig(deps: OpsReadDeps) {

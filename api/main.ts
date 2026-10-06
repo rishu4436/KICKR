@@ -18,9 +18,11 @@ import path from "node:path";
 import { createIoredisClient } from "../redis/ioredis-client.js";
 import { createLogger } from "../shared/logger.js";
 import { InMemoryRateLimiter } from "../shared/rate-limit.js";
+import { ReliabilityCounters } from "../shared/reliability.js";
 import { systemClock } from "../shared/clock.js";
 import { ConfigError } from "../shared/errors.js";
 import { createApp } from "./server.js";
+import { createPgIdempotencyStore } from "../db/idempotency-repository.js";
 import { createPgSettlementStore } from "../db/settlement-repository.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
@@ -28,6 +30,7 @@ import { InMemorySnapshotStore } from "../live/snapshot.js";
 
 /**
  * API process entrypoint.
+ * Phase 8 wires rate limits, idempotency, counters, and dependency probes.
  * Phase 5 starts the live ingest worker only when LIVE_PROVIDER_CONFIGURED.
  * Settlement, review, and payout workers remain contracts-only.
  */
@@ -131,6 +134,7 @@ if (sportsRuntime.liveConfigured) {
 const snapshots = new InMemorySnapshotStore();
 const settlement = new SettlementService(createPgSettlementStore(db));
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
+const counters = new ReliabilityCounters();
 const app = createApp({
   config,
   auth,
@@ -150,6 +154,31 @@ const app = createApp({
     config.server.rateLimit.authMax,
     config.server.rateLimit.authWindowSeconds * 1000,
   ),
+  counters,
+  idempotency: createPgIdempotencyStore(db),
+  probes: {
+    database: async () => {
+      const result = await pool.query("SELECT 1 AS ok");
+      return (result.rowCount ?? 0) === 1;
+    },
+    solana: async () => {
+      const response = await fetch(config.secrets.solanaRpcUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (!response.ok) {
+        return false;
+      }
+      const body = (await response.json()) as { result?: unknown; error?: unknown };
+      return body.error === undefined;
+    },
+    sports: async () => ({
+      configured: config.public.liveProviderConfigured,
+      reachable: null,
+    }),
+  },
 });
 
 const server = serve({ fetch: app.fetch, port: config.server.port }, (info) => {

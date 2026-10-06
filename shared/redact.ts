@@ -27,10 +27,12 @@ export function redact(value: unknown, depth = 0): unknown {
     return out;
   }
   if (typeof value === "string") {
-    return value.replace(CONNECTION_URL, (match) => {
-      const scheme = match.startsWith("redis") ? "redis" : "postgres";
-      return `${scheme}://[redacted]`;
-    });
+    return value
+      .replace(CONNECTION_URL, (match) => {
+        const scheme = match.startsWith("redis") ? "redis" : "postgres";
+        return `${scheme}://[redacted]`;
+      })
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]");
   }
   return value;
 }

@@ -124,6 +124,8 @@ function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAd
   sessionStorage.setItem("kickr.session.token", input.token);
   sessionStorage.setItem("kickr.auth.mode", input.mode);
   sessionStorage.setItem("kickr.auth.wallet", input.walletAddress);
+  sessionStorage.removeItem("kickr.dev.depositSecret");
+  sessionStorage.removeItem("kickr.dev.depositSecretLabel");
   if (input.mode === "dev") {
     sessionStorage.setItem("kickr.dev.token", input.token);
   } else {
@@ -131,8 +133,26 @@ function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAd
   }
 }
 
+let devDepositKey: Keypair | null = null;
+let runtimeEnv: string | null = null;
+
+async function runtimeEnvironment(): Promise<string> {
+  if (runtimeEnv) return runtimeEnv;
+  try {
+    const response = await fetch("/v1/config/public");
+    const body = (await response.json()) as { environment?: string };
+    runtimeEnv = body.environment ?? "development";
+  } catch {
+    runtimeEnv = "development";
+  }
+  return runtimeEnv;
+}
+
 /** Development signer path — keeps nacl.sign.keyPair() for local testing only. */
 async function signInDevelopment(): Promise<void> {
+  if (await runtimeEnvironment() === "production") {
+    throw new Error("Development signer is disabled");
+  }
   const pair = nacl.sign.keyPair();
   const walletAddress = bs58.encode(pair.publicKey);
   const nonce = await api<{ message: string }>("/v1/auth/nonce", {
@@ -201,7 +221,7 @@ async function render(): Promise<void> {
       `<p class="quiet">Connect Phantom/Solflare for real claims, or use a development signer for local testing.</p>
        <div class="row">
          <button class="primary" id="signin-wallet">Connect wallet</button>
-         <button class="ghost" id="signin-dev">Sign in (development)</button>
+         ${ (await runtimeEnvironment()) === "production" ? "" : '<button class="ghost" id="signin-dev">Sign in (development)</button>' }
        </div>
        <p class="note" id="auth-note"></p>`,
     );
@@ -473,14 +493,29 @@ async function signDeposit(matchId: string): Promise<void> {
   try {
     assertDevCluster(plan.cluster);
     const connection = new Connection(publicRpc(plan.cluster), "finalized");
-    const payer = await devDepositKeypair();
     const blockhash = await connection.getLatestBlockhash("finalized");
-    const tx = buildDepositTransaction({
-      plan,
-      feePayer: payer.publicKey,
-      recentBlockhash: blockhash.blockhash,
-    });
-    const signed = await signWithWallet(tx, payer);
+    const production = (await runtimeEnvironment()) === "production";
+    const browserWallet = readBrowserWallet();
+    let signed: Transaction;
+    if (production) {
+      if (!browserWallet?.publicKey) {
+        throw new Error("Connect a wallet. The development deposit signer is disabled.");
+      }
+      const tx = buildDepositTransaction({
+        plan,
+        feePayer: browserWallet.publicKey,
+        recentBlockhash: blockhash.blockhash,
+      });
+      signed = await browserWallet.signTransaction(tx);
+    } else {
+      const payer = await devDepositKeypair();
+      const tx = buildDepositTransaction({
+        plan,
+        feePayer: payer.publicKey,
+        recentBlockhash: blockhash.blockhash,
+      });
+      signed = await signWithWallet(tx, payer);
+    }
     const signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
     state.depositSignature = signature;
     state.joinPhase = "SUBMITTED";
@@ -536,14 +571,15 @@ async function signWithWallet(tx: Transaction, fallback: Keypair): Promise<Trans
 }
 
 async function devDepositKeypair(): Promise<Keypair> {
-  const existing = sessionStorage.getItem("kickr.dev.depositSecret");
-  if (existing) {
-    return Keypair.fromSecretKey(bs58.decode(existing));
+  if (await runtimeEnvironment() === "production") {
+    throw new Error("Development deposit signer is disabled");
   }
-  const created = Keypair.generate();
-  sessionStorage.setItem("kickr.dev.depositSecret", bs58.encode(created.secretKey));
-  sessionStorage.setItem("kickr.dev.depositSecretLabel", "throwaway browser devnet signer, not a committed key");
-  return created;
+  sessionStorage.removeItem("kickr.dev.depositSecret");
+  sessionStorage.removeItem("kickr.dev.depositSecretLabel");
+  if (!devDepositKey) {
+    devDepositKey = Keypair.generate();
+  }
+  return devDepositKey;
 }
 
 async function renderDetail(id: string): Promise<void> {

@@ -14,6 +14,7 @@ import type {
   RulesSnapshot,
 } from "../contests/types.js";
 import { ESCROW_PLACEHOLDER } from "../contests/types.js";
+import { confirmationAllowed } from "../contests/expiry.js";
 import { nonceHash, toHex } from "../solana/escrow.js";
 import { AppError } from "../shared/errors.js";
 import { newId, newNonce } from "../shared/ids.js";
@@ -678,6 +679,29 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
             idempotent: true,
           };
         }
+        const reservationState = await tx.query<Row>(
+          `SELECT status, expires_at FROM contest_reservations WHERE id = $1`,
+          [input.reservationId],
+        );
+        const reservationRow = reservationState.rows[0];
+        if (!reservationRow) {
+          throw new AppError("NOT_FOUND", 404, "Not found");
+        }
+        const reservationStatus = asString(reservationRow.status);
+        const expiresAt = asDate(reservationRow.expires_at).toISOString();
+        if (reservationStatus !== "CONFIRMED" && !confirmationAllowed({
+          reservationStatus,
+          expiresAt,
+          blockTime: input.blockTime,
+          now: input.now,
+        })) {
+          await tx.query(
+            `UPDATE contest_reservations SET status = 'EXPIRED', updated_at = $2
+             WHERE id = $1 AND status = 'PENDING'`,
+            [input.reservationId, input.now.toISOString()],
+          );
+          throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+        }
         const nowIso = input.now.toISOString();
         const blockTime = input.blockTime === null ? null : new Date(input.blockTime * 1000).toISOString();
         const updatedEntry = await tx.query(
@@ -691,12 +715,15 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         if ((updatedEntry.rowCount ?? 0) !== 1) {
           throw new AppError("DUPLICATE", 409, "Deposit already recorded");
         }
-        await tx.query(
+        const updatedReservation = await tx.query(
           `UPDATE contest_reservations
            SET status = 'CONFIRMED', confirmation_status = 'VERIFIED', deposit_signature = $2, updated_at = $3
-           WHERE id = $1 AND status = 'PENDING'`,
+           WHERE id = $1 AND status IN ('PENDING', 'EXPIRED')`,
           [input.reservationId, input.signature, nowIso],
         );
+        if ((updatedReservation.rowCount ?? 0) !== 1) {
+          throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
+        }
         await tx.query(
           `UPDATE contests c
            SET confirmed_count = confirmed_count + 1, escrow_pda = $2, vault_address = $3, usdc_mint = $4, updated_at = $5

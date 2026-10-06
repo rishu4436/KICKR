@@ -1,3 +1,4 @@
+import { AppError } from "../shared/errors.js";
 import { newId } from "../shared/ids.js";
 import type { SettlementRecord, SettlementResultRow } from "./types.js";
 
@@ -10,6 +11,16 @@ export interface SettlementStore {
   insertRows(rows: SettlementResultRow[]): Promise<void>;
   updateRow(row: SettlementResultRow): Promise<void>;
   getRowByEntry(settlementId: string, entryId: string): Promise<SettlementResultRow | null>;
+  compareAndSetClaim(
+    settlementId: string,
+    entryId: string,
+    next: {
+      claimStatus: SettlementResultRow["claimStatus"];
+      claimSignature: string | null;
+      claimedAt: string | null;
+    },
+    from: readonly SettlementResultRow["claimStatus"][],
+  ): Promise<{ row: SettlementResultRow; applied: boolean }>;
   hasConfirmedSettlement(contestId: string): Promise<boolean>;
   listSettlements(): Promise<SettlementRecord[]>;
   listAllResultRows(): Promise<SettlementResultRow[]>;
@@ -110,6 +121,34 @@ export class InMemorySettlementStore implements SettlementStore {
       (item) => item.settlementId === settlementId && item.entryId === entryId,
     );
     return row ? structuredClone(row) : null;
+  }
+
+  async compareAndSetClaim(
+    settlementId: string,
+    entryId: string,
+    next: {
+      claimStatus: SettlementResultRow["claimStatus"];
+      claimSignature: string | null;
+      claimedAt: string | null;
+    },
+    from: readonly SettlementResultRow["claimStatus"][],
+  ) {
+    const row = [...this.rows.values()].find(
+      (item) => item.settlementId === settlementId && item.entryId === entryId,
+    );
+    if (!row) {
+      throw new AppError("ENTRY_NOT_FOUND", 404, "Settlement entry not found");
+    }
+    if (from.includes(row.claimStatus)) {
+      row.claimStatus = next.claimStatus;
+      row.claimSignature = next.claimSignature;
+      row.claimedAt = next.claimedAt;
+      return { row: structuredClone(row), applied: true };
+    }
+    if (row.claimStatus === next.claimStatus && row.claimSignature === next.claimSignature) {
+      return { row: structuredClone(row), applied: false };
+    }
+    throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed");
   }
 
   async listSettlements(): Promise<SettlementRecord[]> {

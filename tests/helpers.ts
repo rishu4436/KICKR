@@ -34,11 +34,14 @@ export function testConfig(overrides?: {
   databaseUrl?: string;
   redisUrl?: string;
   solanaRpcUrl?: string;
+  nodeEnv?: "production" | "development" | "test";
+  origins?: readonly string[];
 }): AppConfig {
+  const nodeEnv = overrides?.nodeEnv ?? "test";
   return {
     public: {
       appName: "KICKR",
-      environment: "test",
+      environment: nodeEnv,
       authDomain: "localhost",
       solanaCluster: "devnet",
       escrowProgramId: "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN",
@@ -48,7 +51,7 @@ export function testConfig(overrides?: {
       liveProviderConfigured: false,
     },
     server: {
-      nodeEnv: "test",
+      nodeEnv,
       port: 3000,
       logLevel: "error",
       auth: {
@@ -57,6 +60,7 @@ export function testConfig(overrides?: {
         sessionTtlSeconds: 3600,
       },
       rateLimit: { authMax: 30, authWindowSeconds: 60 },
+      origins: overrides?.origins ?? [],
       solana: {
         cluster: "devnet",
         escrowProgramId: "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN",

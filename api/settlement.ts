@@ -3,6 +3,7 @@ import type { Principal } from "../auth/types.js";
 import type { Permission } from "../rbac/permissions.js";
 import { AppError } from "../shared/errors.js";
 import type { AppEnv, AppDeps } from "./server.js";
+import { consumeLimit, replayOrRun } from "./guard.js";
 import { assertApproverIsNotCalculator } from "../settlement/approval-guard.js";
 import { decideClaim, decideSettlementCommit, type ClaimObservation, type SettlementCommitObservation } from "../settlement/verify.js";
 import { buildClaimPlan, type ClaimPlan } from "../solana/escrow.js";
@@ -98,58 +99,79 @@ export function registerSettlementRoutes(
   app.post("/contests/:id/settlement/calculate", async (c) => {
     const principal = await authenticate(c);
     await authorize(c, "RUN_SCORING");
-    const orch = deps.settlementOrchestrator;
-    if (!orch) {
-      throw new AppError("NOT_FOUND", 404, "Settlement orchestrator is not available");
-    }
-    const settlement = await orch.calculateFromApprovedSnapshots({
-      contestId: c.req.param("id"),
-      matchSettlementGate: "FINAL",
-      actorId: principal.accountId,
-      nowIso: deps.clock().toISOString(),
+    const contestId = c.req.param("id");
+    await consumeLimit(deps, c, "settlement", `${principal.accountId}:calculate:${contestId}`);
+    const result = await replayOrRun(deps, c, "settlement-calculate", { contestId, actorId: principal.accountId }, async () => {
+      const orch = deps.settlementOrchestrator;
+      if (!orch) {
+        throw new AppError("NOT_FOUND", 404, "Settlement orchestrator is not available");
+      }
+      const settlement = await orch.calculateFromApprovedSnapshots({
+        contestId,
+        matchSettlementGate: "FINAL",
+        actorId: principal.accountId,
+        nowIso: deps.clock().toISOString(),
+      });
+      await appendAudit(deps, c, principal, "RESULT_CALCULATED", settlement.id, {
+        contestId: settlement.contestId,
+        resultHash: settlement.resultHash,
+        settlementVersion: settlement.settlementVersion,
+      });
+      return {
+        status: 200,
+        body: {
+          id: settlement.id,
+          status: settlement.status,
+          resultHash: settlement.resultHash,
+          settlementVersion: settlement.settlementVersion,
+        },
+      };
     });
-    await appendAudit(deps, c, principal, "RESULT_CALCULATED", settlement.id, {
-      contestId: settlement.contestId,
-      resultHash: settlement.resultHash,
-      settlementVersion: settlement.settlementVersion,
-    });
-    return c.json({
-      id: settlement.id,
-      status: settlement.status,
-      resultHash: settlement.resultHash,
-      settlementVersion: settlement.settlementVersion,
-    });
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/settlements/:id/claim-submit", async (c) => {
     const principal = await authenticate(c);
     const service = requireSettlement(deps);
-    const body = (await c.req.json()) as { entryId: string; signature: string };
+    const settlementId = c.req.param("id");
+    const body = (await readBoundedJson(c)) as { entryId?: string; signature?: string };
     if (!body.entryId || !body.signature) {
       throw new AppError("VALIDATION", 400, "entryId and signature required");
     }
-    const proof = await service.claimProof(c.req.param("id"), body.entryId);
-    if (proof.row.destinationWallet !== principal.walletAddress) {
-      throw new AppError("FORBIDDEN", 403, "Claimant wallet does not match authenticated entry destination");
-    }
-    if (proof.row.claimStatus === "CLAIMED") {
-      throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed — do not submit again");
-    }
-    // Record submitted only — never claimed until reconcile verifies finalized chain tx.
-    const row = await service.markClaimSubmitted(
-      c.req.param("id"),
-      body.entryId,
-      body.signature,
-      deps.clock().toISOString(),
+    await consumeLimit(deps, c, "claim-submit", `${principal.accountId}:${settlementId}:${body.entryId}`);
+    const result = await replayOrRun(
+      deps,
+      c,
+      "claim-submit",
+      { settlementId, entryId: body.entryId, signature: body.signature },
+      async () => {
+        const proof = await service.claimProof(settlementId, body.entryId!);
+        if (proof.row.destinationWallet !== principal.walletAddress) {
+          throw new AppError("FORBIDDEN", 403, "Claimant wallet does not match authenticated entry destination");
+        }
+        if (proof.row.claimStatus === "CLAIMED") {
+          throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed — do not submit again");
+        }
+        const row = await service.markClaimSubmitted(
+          settlementId,
+          body.entryId!,
+          body.signature!,
+          deps.clock().toISOString(),
+        );
+        return {
+          status: 200,
+          body: {
+            entryId: row.entryId,
+            claimStatus: row.claimStatus,
+            claimUiState: "submitted",
+            claimSignature: row.claimSignature,
+            explorerUrl: null,
+            note: "Submitted is not claimed. Wait for independent finalized verification.",
+          },
+        };
+      },
     );
-    return c.json({
-      entryId: row.entryId,
-      claimStatus: row.claimStatus,
-      claimUiState: "submitted",
-      claimSignature: row.claimSignature,
-      explorerUrl: null,
-      note: "Submitted is not claimed. Wait for independent finalized verification.",
-    });
+    return c.json(result.body, result.status as 200);
   });
 
   app.get("/contests/:id/settlement/result", async (c) => {
@@ -266,13 +288,18 @@ export function registerSettlementRoutes(
   app.post("/settlements/:id/review", async (c) => {
     const principal = await authenticate(c);
     await authorize(c, "REVIEW_RESULT");
-    const service = requireSettlement(deps);
-    const settlement = await service.review(c.req.param("id"), principal.accountId, deps.clock().toISOString());
-    await appendAudit(deps, c, principal, "RESULT_REVIEWED", settlement.id, {
-      contestId: settlement.contestId,
-      resultHash: settlement.resultHash,
+    const settlementId = c.req.param("id");
+    await consumeLimit(deps, c, "settlement", `${principal.accountId}:review:${settlementId}`);
+    const result = await replayOrRun(deps, c, "settlement-review", { settlementId, actorId: principal.accountId }, async () => {
+      const service = requireSettlement(deps);
+      const settlement = await service.review(settlementId, principal.accountId, deps.clock().toISOString());
+      await appendAudit(deps, c, principal, "RESULT_REVIEWED", settlement.id, {
+        contestId: settlement.contestId,
+        resultHash: settlement.resultHash,
+      });
+      return { status: 200, body: { id: settlement.id, status: settlement.status, resultHash: settlement.resultHash } };
     });
-    return c.json({ id: settlement.id, status: settlement.status, resultHash: settlement.resultHash });
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/settlements/:id/reject", async (c) => {
@@ -298,20 +325,28 @@ export function registerSettlementRoutes(
   app.post("/settlements/:id/approve", async (c) => {
     const principal = await authenticate(c);
     await authorize(c, "REVIEW_RESULT");
-    const service = requireSettlement(deps);
-    await assertApproverIsNotCalculator(deps.audit, c.req.param("id"), principal.accountId);
-    const settlement = await service.approve(c.req.param("id"), principal.accountId, deps.clock().toISOString());
-    await appendAudit(deps, c, principal, "RESULT_APPROVED", settlement.id, {
-      contestId: settlement.contestId,
-      resultHash: settlement.resultHash,
-      approvedBy: principal.accountId,
+    const settlementId = c.req.param("id");
+    await consumeLimit(deps, c, "settlement", `${principal.accountId}:approve:${settlementId}`);
+    const result = await replayOrRun(deps, c, "settlement-approve", { settlementId, actorId: principal.accountId }, async () => {
+      const service = requireSettlement(deps);
+      await assertApproverIsNotCalculator(deps.audit, settlementId, principal.accountId);
+      const settlement = await service.approve(settlementId, principal.accountId, deps.clock().toISOString());
+      await appendAudit(deps, c, principal, "RESULT_APPROVED", settlement.id, {
+        contestId: settlement.contestId,
+        resultHash: settlement.resultHash,
+        approvedBy: principal.accountId,
+      });
+      return {
+        status: 200,
+        body: {
+          id: settlement.id,
+          status: settlement.status,
+          resultHash: settlement.resultHash,
+          approvedAt: settlement.approvedAt,
+        },
+      };
     });
-    return c.json({
-      id: settlement.id,
-      status: settlement.status,
-      resultHash: settlement.resultHash,
-      approvedAt: settlement.approvedAt,
-    });
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/settlements/:id/prepare", async (c) => {
@@ -403,7 +438,7 @@ export function registerSettlementRoutes(
   app.post("/settlements/:id/reconcile-claim", async (c) => {
     const principal = await authenticate(c);
     const service = requireSettlement(deps);
-    const body = (await c.req.json()) as {
+    const body = (await readBoundedJson(c)) as {
       entryId: string;
       signature?: string;
       observation?: ClaimObservation;
@@ -415,6 +450,7 @@ export function registerSettlementRoutes(
     if (!body.entryId) {
       throw new AppError("VALIDATION", 400, "entryId required");
     }
+    await consumeLimit(deps, c, "claim-reconcile", `${principal.accountId}:${c.req.param("id")}:${body.entryId}`);
     const proof = await service.claimProof(c.req.param("id"), body.entryId);
     if (proof.row.destinationWallet !== principal.walletAddress) {
       throw new AppError("FORBIDDEN", 403, "Only the authenticated claimant may reconcile their claim");
@@ -437,14 +473,16 @@ export function registerSettlementRoutes(
         throw new AppError("VALIDATION", 400, "signature or observation required");
       }
       try {
-        observation = await observeFinalizedClaim(
+        const observe = deps.claimObserver ?? observeFinalizedClaim;
+        observation = await observe(
           deps.config.secrets.solanaRpcUrl,
           signature,
           deps.config.server.solana.escrowProgramId,
         );
       } catch (error) {
         if (error instanceof RpcUnavailable) {
-          // RPC timeout / unavailable: stay confirming — never mark FAILED.
+          deps.counters?.hit("claim_reconcile_delays");
+          deps.counters?.hit("dependency_timeouts");
           return c.json({
             entryId: proof.row.entryId,
             claimStatus: proof.row.claimStatus,
@@ -457,6 +495,7 @@ export function registerSettlementRoutes(
         throw error;
       }
       if (!observation) {
+        deps.counters?.hit("claim_reconcile_delays");
         return c.json({
           entryId: proof.row.entryId,
           claimStatus: proof.row.claimStatus === "UNCLAIMED" ? "SUBMITTED" : proof.row.claimStatus,
@@ -481,25 +520,7 @@ export function registerSettlementRoutes(
       existingSignature: null,
     });
     if (!decision.ok) {
-      // Wrong tx is a safe failure, not paid.
-      if (decision.reason === "DUPLICATE_CLAIM" || decision.reason === "TRANSACTION_FAILED") {
-        // Program race / already initialized claim PDA → ALREADY_CLAIMED when observation shows success elsewhere.
-        if (decision.reason === "DUPLICATE_CLAIM") {
-          const row = await service.markClaimed(
-            c.req.param("id"),
-            body.entryId,
-            proof.row.claimSignature ?? observation.signature,
-            deps.clock().toISOString(),
-          );
-          return c.json({
-            entryId: row.entryId,
-            claimStatus: row.claimStatus,
-            claimUiState: "already_claimed",
-            claimSignature: row.claimSignature,
-            explorerUrl: explorerUrl(row.claimSignature, deps.config.public.solanaCluster),
-          });
-        }
-      }
+      // Wrong or failed finalized tx is rejected. Status stays unchanged so a later valid tx can claim.
       throw new AppError("RECONCILE_REJECTED", 409, decision.reason);
     }
     if (decision.idempotent) {
@@ -705,3 +726,15 @@ function buildAuthorizedClaimPlan(
   });
 }
 
+
+async function readBoundedJson(c: Context<AppEnv>): Promise<unknown> {
+  const raw = await c.req.text();
+  if (raw.length > 16_384) {
+    throw new AppError("VALIDATION", 400, "Body too large");
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new AppError("VALIDATION", 400, "Body must be JSON");
+  }
+}

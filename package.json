@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 7: operations control center. No mainnet mint. RUN_SETTLEMENT is granted to nobody. Program is USDC authority.",
+  "description": "KICKR Phase 8: reliability and abuse resistance. No mainnet mint. RUN_SETTLEMENT is granted to nobody. Program is USDC authority.",
   "type": "module",
   "engines": {
     "node": ">=20"

@@ -27,6 +27,8 @@ export type IndexerOutcome =
  * move tokens.
  */
 export class DepositIndexer {
+  /** Optional Phase 8 counters. Null keeps the indexer usable without them. */
+  reliability: { hit(name: "deposit_verification_failures" | "dependency_timeouts"): void } | null = null;
   readonly health: IndexerHealth = {
     rpcErrors: 0,
     unknownDeposits: 0,
@@ -47,6 +49,7 @@ export class DepositIndexer {
       observation = await this.fetchObservation(signature);
     } catch {
       this.health.rpcErrors += 1;
+      this.reliability?.hit("dependency_timeouts");
       return { outcome: "PENDING", reason: "RPC_UNAVAILABLE" };
     }
     if (!observation || observation.commitment !== "finalized") {
@@ -80,6 +83,7 @@ export class DepositIndexer {
         return { outcome: "PENDING", reason: "NOT_FINALIZED" };
       }
       this.health.verificationFailures += 1;
+      this.reliability?.hit("deposit_verification_failures");
       const unknown = decision.reason === "UNKNOWN_RESERVATION";
       if (unknown) {
         this.health.unknownDeposits += 1;

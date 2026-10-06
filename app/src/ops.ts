@@ -297,8 +297,7 @@ function renderDiagnostics(body: Json): HTMLElement {
   const wrap = el("div");
   if (body.available === false) {
     wrap.append(badge(String(body.reason ?? "unavailable")), el("p", "Diagnostics source is not available.", "muted"));
-    return wrap;
-  }
+  } else {
   const metrics = (body.metrics ?? {}) as Json;
   const keys = [
     "providerLatencyMsLast",
@@ -317,6 +316,14 @@ function renderDiagnostics(body: Json): HTMLElement {
     keys.map((key) => [key, metrics[key] === null || metrics[key] === undefined ? "unavailable" : String(metrics[key])]),
   ));
   wrap.append(el("p", "Reused Phase 5 diagnostics. No second ingest implementation.", "muted"));
+  }
+  const counters = body.counters;
+  if (counters && typeof counters === "object") {
+    const rows = Object.entries(counters as Json).map(([key, value]) => [key, String(value)]);
+    wrap.append(el("h2", "Reliability counters"));
+    wrap.append(dataTable(["Counter", "Count"], rows));
+    wrap.append(el("p", "Counters increment only when the API records the event. Liveness, readiness, and dependency health stay on /health, /ready, and /health/dependencies.", "muted"));
+  }
   return wrap;
 }
 

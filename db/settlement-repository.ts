@@ -6,6 +6,7 @@ import type pg from "pg";
 import type { SettlementStore } from "../settlement/memory-store.js";
 import type { SettlementRecord, SettlementResultRow } from "../settlement/types.js";
 import type { ImmutableResultPayload } from "../settlement/result-payload.js";
+import { AppError } from "../shared/errors.js";
 import { asDate, asString } from "./mappers.js";
 import type { Queryable } from "./types.js";
 
@@ -311,6 +312,33 @@ export function createPgSettlementStore(db: Queryable): SettlementStore {
       );
       const row = result.rows[0];
       return row ? resultRowFrom(row) : null;
+    },
+    async compareAndSetClaim(settlementId, entryId, next, from) {
+      const updated = await db.query<Row>(
+        `UPDATE settlement_result_rows
+         SET claim_status = $3, claim_signature = $4, claimed_at = $5
+         WHERE settlement_id = $1 AND entry_id = $2 AND claim_status = ANY($6::text[])
+         RETURNING ${ROW_COLUMNS}`,
+        [settlementId, entryId, next.claimStatus, next.claimSignature, next.claimedAt, from],
+      );
+      const row = updated.rows[0];
+      if (row) {
+        return { row: resultRowFrom(row), applied: true };
+      }
+      const current = await db.query<Row>(
+        `SELECT ${ROW_COLUMNS} FROM settlement_result_rows
+         WHERE settlement_id = $1 AND entry_id = $2`,
+        [settlementId, entryId],
+      );
+      const existing = current.rows[0];
+      if (!existing) {
+        throw new AppError("ENTRY_NOT_FOUND", 404, "Settlement entry not found");
+      }
+      const mapped = resultRowFrom(existing);
+      if (mapped.claimStatus === next.claimStatus && mapped.claimSignature === next.claimSignature) {
+        return { row: mapped, applied: false };
+      }
+      throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed");
     },
 
     async listSettlements() {

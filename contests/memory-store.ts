@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import { assertBaseUnits, ESCROW_PLACEHOLDER } from "./types.js";
 import { nonceHash, toHex } from "../solana/escrow.js";
+import { confirmationAllowed } from "./expiry.js";
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -331,6 +332,14 @@ export class InMemoryContestStore implements ContestStore {
       if (row.status === "CONFIRMED" || row.confirmationStatus === "VERIFIED") {
         throw new AppError("ALREADY_CONFIRMED", 409, "Reservation is already confirmed");
       }
+      if (
+        row.depositSignature === signature &&
+        row.confirmationStatus === "SUBMITTED" &&
+        row.status === "PENDING" &&
+        Date.parse(row.expiresAt) > now.getTime()
+      ) {
+        return clone(row);
+      }
       if (row.status !== "PENDING") {
         throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
       }
@@ -367,6 +376,18 @@ export class InMemoryContestStore implements ContestStore {
       }
       if (entry.status !== "PENDING" || reservation.status === "CONFIRMED") {
         throw new AppError("DUPLICATE", 409, "Deposit already recorded");
+      }
+      if (!confirmationAllowed({
+        reservationStatus: reservation.status,
+        expiresAt: reservation.expiresAt,
+        blockTime: input.blockTime,
+        now: input.now,
+      })) {
+        if (reservation.status === "PENDING") {
+          reservation.status = "EXPIRED";
+          reservation.updatedAt = input.now.toISOString();
+        }
+        throw new AppError("RESERVATION_EXPIRED", 409, "Expired reservation cannot become valid");
       }
       const nowIso = input.now.toISOString();
       entry.status = transition("ENTRY", entry.status, "CONFIRMED") as EntryRecord["status"];

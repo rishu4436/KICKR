@@ -14,6 +14,8 @@ import type { Logger } from "../shared/logger.js";
 import { redact } from "../shared/redact.js";
 import type { RateLimiter } from "../shared/rate-limit.js";
 import type { Clock } from "../shared/clock.js";
+import { InMemoryIdempotencyStore, ReliabilityCounters, type IdempotencyStore } from "../shared/reliability.js";
+import { clientAddress, consumeLimit } from "./guard.js";
 import { loginRequestSchema, nonceRequestSchema } from "./schemas.js";
 import { registerFootballRoutes } from "./football.js";
 import { registerContestRoutes } from "./contests.js";
@@ -22,6 +24,7 @@ import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
 import type { LiveScoringService } from "../live/service.js";
 import type { SettlementService } from "../settlement/service.js";
+import type { ClaimObservation } from "../settlement/verify.js";
 import type { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import type { SnapshotStore } from "../live/snapshot.js";
 import type { ContestService } from "../contests/service.js";
@@ -52,12 +55,31 @@ export interface AppDeps {
   logger: Logger;
   clock: Clock;
   rateLimiter?: RateLimiter;
+  counters?: ReliabilityCounters;
+  idempotency?: IdempotencyStore;
+  probes?: {
+    database?: () => Promise<boolean>;
+    solana?: () => Promise<boolean>;
+    sports?: () => Promise<{ configured: boolean; reachable: boolean | null }>;
+  };
+  /** Test seam. Production uses observeFinalizedClaim. */
+  claimObserver?: (
+    rpcUrl: string,
+    signature: string,
+    programId: string,
+  ) => Promise<ClaimObservation | null>;
 }
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const MAX_BODY_BYTES = 16_384;
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {
+  if (!deps.counters) {
+    deps.counters = new ReliabilityCounters();
+  }
+  if (!deps.idempotency) {
+    deps.idempotency = new InMemoryIdempotencyStore();
+  }
   const app = new Hono<AppEnv>();
 
   app.use("*", async (c, next) => {
@@ -68,7 +90,20 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     c.header("x-request-id", requestId);
     c.header("x-content-type-options", "nosniff");
     c.header("referrer-policy", "no-referrer");
+    c.header("x-frame-options", "DENY");
+    c.header("content-security-policy", "frame-ancestors 'none'");
+    c.header("permissions-policy", "interest-cohort=()");
     c.header("cache-control", "no-store");
+    const origin = c.req.header("origin");
+    if (origin && deps.config.server.origins.includes(origin)) {
+      c.header("access-control-allow-origin", origin);
+      c.header("vary", "Origin");
+      c.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id");
+      c.header("access-control-allow-methods", "GET, POST, OPTIONS");
+    }
+    if (c.req.method === "OPTIONS") {
+      return c.body(null, 204);
+    }
     const started = Date.now();
     try {
       await next();
@@ -84,12 +119,24 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
         "request",
       );
     }
+    return;
   });
 
   app.onError((err, c) => {
     const correlationId = c.get("requestId") || "unknown";
     const normalized = err instanceof ZodError ? zodToAppError(err) : err;
     const mapped = toPublicError(normalized, deps.config.server.nodeEnv, correlationId);
+    if (normalized instanceof AppError) {
+      if (normalized.status === 401) {
+        deps.counters?.hit("auth_failures");
+      } else if (normalized.status === 403) {
+        deps.counters?.hit("authz_failures");
+      } else if (normalized.code === "DUPLICATE_ENTRY" || normalized.code === "DUPLICATE_RESERVATION" || normalized.code === "CONTEST_FULL") {
+        deps.counters?.hit("reservation_conflicts");
+      } else if (normalized.code === "SETTLEMENT_FAILED") {
+        deps.counters?.hit("settlement_failures");
+      }
+    }
     if (!(normalized instanceof AppError) || normalized.status >= 500) {
       deps.logger.error(
         redact({
@@ -119,22 +166,43 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   app.get("/health", (c) => {
     return c.json({
       ok: true,
+      check: "live",
       service: "kickr-api",
       LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
     });
   });
 
   app.get("/ready", async (c) => {
-    const redis = await checkRedisHealth(deps.redis);
+    const report = await dependencyReport(deps);
     return c.json(
       {
-        ok: redis.ok,
-        redis,
+        ok: report.ready,
+        check: "ready",
+        redis: report.dependencies.redis,
+        database: report.dependencies.database,
+        startupConfig: report.dependencies.startupConfig,
         service: "kickr-api",
         LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
       },
-      redis.ok ? 200 : 503,
+      report.ready ? 200 : 503,
     );
+  });
+
+  app.get("/health/dependencies", async (c) => {
+    const report = await dependencyReport(deps);
+    return c.json(report, report.live ? 200 : 503);
+  });
+
+  app.post("/v1/dev/fixtures/load", (c) => {
+    if (deps.config.server.nodeEnv === "production") {
+      throw new AppError("FIXTURE_DISABLED", 404, "Fixture routes are not available");
+    }
+    return c.json({
+      ok: true,
+      loaded: false,
+      isolated: true,
+      note: "Fixture catalogs stay out of production runtime and are not loaded here.",
+    });
   });
 
   app.get("/v1/config/public", (c) => {
@@ -142,15 +210,15 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.post("/v1/auth/nonce", async (c) => {
-    await consumeAuthRateLimit(deps, c);
     const body = nonceRequestSchema.parse(await readJson(c));
+    await consumeLimit(deps, c, "auth-nonce", `${clientAddress(c)}:${body.walletAddress}`);
     const issued = await deps.auth.issueNonce(body.walletAddress, requestContext(deps, c));
     return c.json(issued, 201);
   });
 
   app.post("/v1/auth/login", async (c) => {
-    await consumeAuthRateLimit(deps, c);
     const body = loginRequestSchema.parse(await readJson(c));
+    await consumeLimit(deps, c, "auth-login", `${clientAddress(c)}:${body.walletAddress}`);
     const result = await deps.auth.login(body, requestContext(deps, c));
     return c.json(result, 200);
   });
@@ -292,6 +360,16 @@ async function requirePermission(
   }
   const grants = await loadGrants(deps, principal.accountId);
   if (!grantedPermissions(grants).has(permission)) {
+    await deps.audit.append({
+      action: "PERMISSION_DENIED",
+      occurredAt: deps.clock(),
+      entityType: "ROUTE",
+      entityId: c.req.path.slice(0, 128),
+      metadata: { result: "denied", permission },
+      actorAccountId: principal.accountId,
+      actorWallet: principal.walletAddress,
+      correlationId: c.get("requestId") ?? null,
+    });
     throw new AppError("FORBIDDEN", 403, "Permission denied");
   }
 }
@@ -311,20 +389,63 @@ function parseLimit(c: Context<AppEnv>): number {
   return limit;
 }
 
-async function consumeAuthRateLimit(deps: AppDeps, c: Context<AppEnv>): Promise<void> {
-  if (!deps.rateLimiter) {
-    return;
-  }
-  const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  const key = `auth:${forwarded || "local"}`;
-  const decision = await deps.rateLimiter.consume(key, deps.clock().getTime());
-  if (!decision.allowed) {
-    throw new AppError("RATE_LIMITED", 429, "Too many requests");
-  }
-}
-
 function zodToAppError(err: ZodError): AppError {
   return new AppError("VALIDATION", 400, "Invalid input", {
     fields: err.issues.map((issue) => issue.path.join(".") || "body"),
   });
+}
+
+
+async function dependencyReport(deps: AppDeps): Promise<{
+  live: boolean;
+  ready: boolean;
+  dependencies: {
+    database: { ok: boolean; skipped?: boolean };
+    redis: { ok: boolean; latencyMs: number };
+    sports: { ok: boolean; configured: boolean; reachable: boolean | null };
+    solanaRpc: { ok: boolean; skipped?: boolean };
+    startupConfig: { ok: boolean };
+  };
+}> {
+  const redis = await checkRedisHealth(deps.redis);
+  if (!redis.ok) {
+    deps.counters?.hit("dependency_timeouts");
+  }
+  let database: { ok: boolean; skipped?: boolean } = { ok: true, skipped: true };
+  if (deps.probes?.database) {
+    try {
+      database = { ok: await deps.probes.database() };
+    } catch {
+      database = { ok: false };
+    }
+    if (!database.ok) {
+      deps.counters?.hit("dependency_timeouts");
+    }
+  }
+  let solanaRpc: { ok: boolean; skipped?: boolean } = { ok: true, skipped: true };
+  if (deps.probes?.solana) {
+    try {
+      solanaRpc = { ok: await deps.probes.solana() };
+    } catch {
+      solanaRpc = { ok: false };
+      deps.counters?.hit("dependency_timeouts");
+    }
+  }
+  const sportsProbe = deps.probes?.sports
+    ? await deps.probes.sports().catch(() => ({ configured: deps.config.public.liveProviderConfigured, reachable: false as boolean | null }))
+    : { configured: deps.config.public.liveProviderConfigured, reachable: null as boolean | null };
+  const sportsOk = !sportsProbe.configured || sportsProbe.reachable !== false;
+  const startupOk = Boolean(deps.config.secrets.databaseUrl && deps.config.secrets.redisUrl && deps.config.server.auth.domain);
+  const ready = redis.ok && database.ok && startupOk;
+  return {
+    live: true,
+    ready,
+    dependencies: {
+      database,
+      redis,
+      sports: { ok: sportsOk, configured: sportsProbe.configured, reachable: sportsProbe.reachable },
+      solanaRpc,
+      startupConfig: { ok: startupOk },
+    },
+  };
 }

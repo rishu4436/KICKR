@@ -273,31 +273,25 @@ export class SettlementService {
     if (row.claimStatus === "SUBMITTED" && row.claimSignature === signature) {
       return row;
     }
-    // SUBMITTED ≠ CONFIRMED. Do not mark CLAIMED here.
-    row.claimStatus = "SUBMITTED";
-    row.claimSignature = signature;
-    row.claimedAt = null;
-    await this.store.updateRow(row);
+    // SUBMITTED is not CLAIMED. The conditional update is the only transition.
+    const changed = await this.store.compareAndSetClaim(
+      settlementId,
+      entryId,
+      { claimStatus: "SUBMITTED", claimSignature: signature, claimedAt: null },
+      ["UNCLAIMED", "SUBMITTED", "FAILED"],
+    );
     void nowIso;
-    return row;
+    return changed.row;
   }
 
   async markClaimed(settlementId: string, entryId: string, signature: string, nowIso: string): Promise<SettlementResultRow> {
-    const row = await this.store.getRowByEntry(settlementId, entryId);
-    if (!row) {
-      throw new AppError("ENTRY_NOT_FOUND", 404, "Settlement entry not found");
-    }
-    if (row.claimStatus === "CLAIMED" && row.claimSignature === signature) {
-      return row;
-    }
-    if (row.claimStatus === "CLAIMED") {
-      throw new AppError("ALREADY_CLAIMED", 409, "Payout already claimed");
-    }
-    row.claimStatus = "CLAIMED";
-    row.claimSignature = signature;
-    row.claimedAt = nowIso;
-    await this.store.updateRow(row);
-    return row;
+    const changed = await this.store.compareAndSetClaim(
+      settlementId,
+      entryId,
+      { claimStatus: "CLAIMED", claimSignature: signature, claimedAt: nowIso },
+      ["UNCLAIMED", "SUBMITTED", "FAILED"],
+    );
+    return changed.row;
   }
 
   async listAll(): Promise<SettlementRecord[]> {

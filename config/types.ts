@@ -52,6 +52,8 @@ export interface ServerConfig {
     authMax: number;
     authWindowSeconds: number;
   };
+  /** Browser origins allowed to call the API. Empty in development. Required in production. */
+  origins: readonly string[];
   solana: {
     cluster: string;
     escrowProgramId: string;

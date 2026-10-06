@@ -46,6 +46,10 @@ export const envSchema = z.object({
   SESSION_TTL_SECONDS: intOrDefault(86_400),
   AUTH_RATE_LIMIT_MAX: intOrDefault(30),
   AUTH_RATE_LIMIT_WINDOW_SECONDS: intOrDefault(60),
+  ALLOWED_ORIGINS: z.preprocess(
+    (value) => (value === undefined || value === "" ? "" : value),
+    z.string(),
+  ),
   SOLANA_CLUSTER: stringOrDefault("devnet").refine((value) => {
     try {
       assertDevCluster(value);

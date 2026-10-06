@@ -35,6 +35,7 @@ import {
 import { assertApproverIsNotCalculator } from "../settlement/approval-guard.js";
 import { AppError } from "../shared/errors.js";
 import type { AppDeps, AppEnv } from "./server.js";
+import { consumeLimit, replayOrRun } from "./guard.js";
 
 const uuidSchema = z.string().uuid();
 
@@ -198,8 +199,11 @@ export function registerOpsRoutes(
       accountId: uuidSchema,
       role: z.enum(ROLES),
     }).strict());
-    const changed = await grantOpsRole(accessDeps(deps), actorOf(deps, c, principal), body.accountId, body.role);
-    return c.json(changed, 201);
+    const result = await replayOrRun(deps, c, "ops-role-grant", body, async () => {
+      const changed = await grantOpsRole(accessDeps(deps), actorOf(deps, c, principal), body.accountId, body.role);
+      return { status: 201, body: changed };
+    });
+    return c.json(result.body, result.status as 201);
   });
 
   app.post("/v1/ops/access/roles/remove", async (c) => {
@@ -210,7 +214,11 @@ export function registerOpsRoutes(
       accountId: uuidSchema,
       role: z.enum(ROLES),
     }).strict());
-    return c.json(await removeOpsRole(accessDeps(deps), actorOf(deps, c, principal), body.accountId, body.role));
+    const result = await replayOrRun(deps, c, "ops-role-remove", body, async () => ({
+      status: 200,
+      body: await removeOpsRole(accessDeps(deps), actorOf(deps, c, principal), body.accountId, body.role),
+    }));
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/access/capabilities", async (c) => {
@@ -221,13 +229,16 @@ export function registerOpsRoutes(
       accountId: uuidSchema,
       capability: z.enum(CAPABILITIES),
     }).strict());
-    const changed = await grantOpsCapability(
-      accessDeps(deps),
-      actorOf(deps, c, principal),
-      body.accountId,
-      body.capability as CapabilityCode,
-    );
-    return c.json(changed, 201);
+    const result = await replayOrRun(deps, c, "ops-capability-grant", body, async () => ({
+      status: 201,
+      body: await grantOpsCapability(
+        accessDeps(deps),
+        actorOf(deps, c, principal),
+        body.accountId,
+        body.capability as CapabilityCode,
+      ),
+    }));
+    return c.json(result.body, result.status as 201);
   });
 
   app.post("/v1/ops/access/capabilities/remove", async (c) => {
@@ -238,12 +249,16 @@ export function registerOpsRoutes(
       accountId: uuidSchema,
       capability: z.enum(CAPABILITIES),
     }).strict());
-    return c.json(await removeOpsCapability(
-      accessDeps(deps),
-      actorOf(deps, c, principal),
-      body.accountId,
-      body.capability as CapabilityCode,
-    ));
+    const result = await replayOrRun(deps, c, "ops-capability-remove", body, async () => ({
+      status: 200,
+      body: await removeOpsCapability(
+        accessDeps(deps),
+        actorOf(deps, c, principal),
+        body.accountId,
+        body.capability as CapabilityCode,
+      ),
+    }));
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/access/suspend", async (c) => {
@@ -253,7 +268,11 @@ export function registerOpsRoutes(
       confirmationText: z.literal("SUSPEND_ACCOUNT"),
       accountId: uuidSchema,
     }).strict());
-    return c.json(await suspendOpsAccount(accessDeps(deps), actorOf(deps, c, principal), body.accountId));
+    const result = await replayOrRun(deps, c, "ops-suspend", body, async () => ({
+      status: 200,
+      body: await suspendOpsAccount(accessDeps(deps), actorOf(deps, c, principal), body.accountId),
+    }));
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/access/sessions/revoke", async (c) => {
@@ -263,7 +282,11 @@ export function registerOpsRoutes(
       confirmationText: z.literal("REVOKE_SESSION"),
       sessionId: uuidSchema,
     }).strict());
-    return c.json(await revokeOpsSession(accessDeps(deps), actorOf(deps, c, principal), body.sessionId));
+    const result = await replayOrRun(deps, c, "ops-session-revoke", body, async () => ({
+      status: 200,
+      body: await revokeOpsSession(accessDeps(deps), actorOf(deps, c, principal), body.sessionId),
+    }));
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/contests/:id/settlement/calculate", async (c) => {
@@ -272,33 +295,40 @@ export function registerOpsRoutes(
       confirm: z.literal(true),
       confirmationText: z.literal("CALCULATE_RESULT"),
     }).strict());
-    const orch = deps.settlementOrchestrator;
-    if (!orch) {
-      throw new AppError("NOT_FOUND", 404, "Settlement orchestrator is not available");
-    }
-    const settlement = await orch.calculateFromApprovedSnapshots({
-      contestId: c.req.param("id"),
-      matchSettlementGate: "FINAL",
-      actorId: principal.accountId,
-      nowIso: deps.clock().toISOString(),
+    const contestId = c.req.param("id");
+    const result = await replayOrRun(deps, c, "ops-settlement-calculate", { contestId, actorId: principal.accountId }, async () => {
+      const orch = deps.settlementOrchestrator;
+      if (!orch) {
+        throw new AppError("NOT_FOUND", 404, "Settlement orchestrator is not available");
+      }
+      const settlement = await orch.calculateFromApprovedSnapshots({
+        contestId,
+        matchSettlementGate: "FINAL",
+        actorId: principal.accountId,
+        nowIso: deps.clock().toISOString(),
+      });
+      await deps.audit.append({
+        action: "RESULT_CALCULATED",
+        actorAccountId: principal.accountId,
+        actorWallet: principal.walletAddress,
+        entityType: "SETTLEMENT",
+        entityId: settlement.id,
+        metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "calculated" },
+        correlationId: c.get("requestId") ?? null,
+        occurredAt: deps.clock(),
+      });
+      return {
+        status: 200,
+        body: {
+          id: settlement.id,
+          status: settlement.status,
+          stage: "calculated",
+          resultHash: settlement.resultHash,
+          settlementVersion: settlement.settlementVersion,
+        },
+      };
     });
-    await deps.audit.append({
-      action: "RESULT_CALCULATED",
-      actorAccountId: principal.accountId,
-      actorWallet: principal.walletAddress,
-      entityType: "SETTLEMENT",
-      entityId: settlement.id,
-      metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "calculated" },
-      correlationId: c.get("requestId") ?? null,
-      occurredAt: deps.clock(),
-    });
-    return c.json({
-      id: settlement.id,
-      status: settlement.status,
-      stage: "calculated",
-      resultHash: settlement.resultHash,
-      settlementVersion: settlement.settlementVersion,
-    });
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/settlements/:id/review", async (c) => {
@@ -307,19 +337,23 @@ export function registerOpsRoutes(
       confirm: z.literal(true),
       confirmationText: z.literal("REVIEW_RESULT"),
     }).strict());
-    const service = requireSettlement(deps);
-    const settlement = await service.review(c.req.param("id"), principal.accountId, deps.clock().toISOString());
-    await deps.audit.append({
-      action: "RESULT_REVIEWED",
-      actorAccountId: principal.accountId,
-      actorWallet: principal.walletAddress,
-      entityType: "SETTLEMENT",
-      entityId: settlement.id,
-      metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "reviewed" },
-      correlationId: c.get("requestId") ?? null,
-      occurredAt: deps.clock(),
+    const settlementId = c.req.param("id");
+    const result = await replayOrRun(deps, c, "ops-settlement-review", { settlementId, actorId: principal.accountId }, async () => {
+      const service = requireSettlement(deps);
+      const settlement = await service.review(settlementId, principal.accountId, deps.clock().toISOString());
+      await deps.audit.append({
+        action: "RESULT_REVIEWED",
+        actorAccountId: principal.accountId,
+        actorWallet: principal.walletAddress,
+        entityType: "SETTLEMENT",
+        entityId: settlement.id,
+        metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "reviewed" },
+        correlationId: c.get("requestId") ?? null,
+        occurredAt: deps.clock(),
+      });
+      return { status: 200, body: { id: settlement.id, status: settlement.status, stage: "reviewed" } };
     });
-    return c.json({ id: settlement.id, status: settlement.status, stage: "reviewed" });
+    return c.json(result.body, result.status as 200);
   });
 
   app.post("/v1/ops/settlements/:id/reject", async (c) => {
@@ -351,20 +385,24 @@ export function registerOpsRoutes(
       confirm: z.literal(true),
       confirmationText: z.literal("APPROVE_RESULT"),
     }).strict());
-    const service = requireSettlement(deps);
-    await assertApproverIsNotCalculator(deps.audit, c.req.param("id"), principal.accountId);
-    const settlement = await service.approve(c.req.param("id"), principal.accountId, deps.clock().toISOString());
-    await deps.audit.append({
-      action: "RESULT_APPROVED",
-      actorAccountId: principal.accountId,
-      actorWallet: principal.walletAddress,
-      entityType: "SETTLEMENT",
-      entityId: settlement.id,
-      metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "approved" },
-      correlationId: c.get("requestId") ?? null,
-      occurredAt: deps.clock(),
+    const settlementId = c.req.param("id");
+    const result = await replayOrRun(deps, c, "ops-settlement-approve", { settlementId, actorId: principal.accountId }, async () => {
+      const service = requireSettlement(deps);
+      await assertApproverIsNotCalculator(deps.audit, settlementId, principal.accountId);
+      const settlement = await service.approve(settlementId, principal.accountId, deps.clock().toISOString());
+      await deps.audit.append({
+        action: "RESULT_APPROVED",
+        actorAccountId: principal.accountId,
+        actorWallet: principal.walletAddress,
+        entityType: "SETTLEMENT",
+        entityId: settlement.id,
+        metadata: { contestId: settlement.contestId, resultHash: settlement.resultHash, result: "approved" },
+        correlationId: c.get("requestId") ?? null,
+        occurredAt: deps.clock(),
+      });
+      return { status: 200, body: { id: settlement.id, status: settlement.status, stage: "approved" } };
     });
-    return c.json({ id: settlement.id, status: settlement.status, stage: "approved" });
+    return c.json(result.body, result.status as 200);
   });
 }
 
@@ -380,6 +418,7 @@ function reads(deps: AppDeps): OpsReadDeps {
     liveProviderConfigured: deps.config.public.liveProviderConfigured,
     providerName: deps.config.server.sportsData.liveProvider,
     cluster: deps.config.public.solanaCluster,
+    counters: deps.counters?.snapshot() ?? null,
   };
 }
 
@@ -402,6 +441,9 @@ async function begin(
   authenticate: (c: Context<AppEnv>) => Promise<Principal>,
 ): Promise<{ principal: Principal; permissions: Set<Permission> }> {
   const principal = await authenticate(c);
+  if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+    await consumeLimit(deps, c, "ops", `${principal.accountId}:${c.req.method}:${c.req.path}`);
+  }
   const claimed = c.req.header("x-wallet-address");
   if (claimed !== undefined && claimed !== principal.walletAddress) {
     await deps.audit.append({
