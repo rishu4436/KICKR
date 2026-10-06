@@ -10,6 +10,7 @@ import {
   resultHeroHtml,
   xiPitchHtml,
 } from "../app/src/format.js";
+import { landingPageHtml } from "../app/src/format-landing.js";
 import {
   classifyContestLifecycle,
   contestPrimaryCta,
@@ -117,5 +118,41 @@ describe("UI product polish helpers", () => {
     const row = lbRowHtml({ rank: 2, label: "w", milliPoints: 1000 });
     expect(row).toContain("lb-row");
     expect(row).toContain("top-2");
+  });
+});
+
+describe("Phase 17.2 landing + consumer chrome", () => {
+  it("renders premium landing with hero CTAs and demo labeling", () => {
+    const html = landingPageHtml({ demoData: true, production: true });
+    expect(html).toContain("KICKR");
+    expect(html).toContain("Fantasy football. Live competition. Verifiable results.");
+    expect(html).toContain("Play Free");
+    expect(html).toContain("Explore Demo");
+    expect(html).toContain("How it works");
+    expect(html).toContain("Live Demo Match");
+    expect(html).toContain("Build Your XI");
+    expect(html).toContain("Live Leaderboards");
+    expect(html).toContain("Private Leagues");
+    expect(html).toContain("Why KICKR");
+    expect(html).toContain("Technology");
+    expect(html).toContain("DEMO DATA");
+    expect(html).toContain("FREE DEMO");
+    expect(html).toContain("Solana");
+    expect(html).not.toContain("Claim Prize");
+  });
+
+  it("keeps huge final rank block for result hero", () => {
+    const html = resultHeroHtml({
+      matchLabel: "Team A vs Team B",
+      contestLabel: "FREE Grand League",
+      rank: 1,
+      totalEntries: 100,
+      scoreLabel: "42.0",
+      free: true,
+    });
+    expect(html).toContain("rank-hero-xl");
+    expect(html).toContain("#1");
+    expect(html).toContain("42.0");
+    expect(html).not.toContain("Claim Prize");
   });
 });

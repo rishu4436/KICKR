@@ -1,7 +1,8 @@
-node_modules
-dist
-.env
-coverage
 *.tsbuildinfo
+.deploy-secrets/
+.env
 .env.demo
 .env.production
+coverage
+dist
+node_modules

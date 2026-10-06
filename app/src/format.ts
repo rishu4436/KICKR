@@ -93,11 +93,16 @@ export function resultHeroHtml(opts: {
     ? `<div class="free-banner"><strong>FREE contest</strong><span>No entry fee · No monetary prize · Rank &amp; score only</span></div>`
     : "";
   return `<article class="card result-hero">
+    <div class="result-rank-block">
+      <span class="quiet">Final rank</span>
+      <strong class="rank-hero rank-hero-xl">#${opts.rank ?? "—"}</strong>
+      <span class="quiet">of ${opts.totalEntries}</span>
+    </div>
     <p class="quiet result-kicker">${escapeText(opts.contestLabel)}</p>
     <h2>${escapeText(opts.matchLabel)}</h2>
     <div class="result-stats">
       <div><span class="quiet">Final rank</span><strong class="rank-hero">#${opts.rank ?? "—"}</strong><span class="quiet">of ${opts.totalEntries}</span></div>
-      <div><span class="quiet">Final score</span><strong>${escapeText(opts.scoreLabel)}</strong><span class="quiet">pts</span></div>
+      <div><span class="quiet">Final score</span><strong class="score-hero">${escapeText(opts.scoreLabel)}</strong><span class="quiet">pts</span></div>
       <div><span class="quiet">Entrants</span><strong>${opts.totalEntries}</strong></div>
     </div>
     ${banner}

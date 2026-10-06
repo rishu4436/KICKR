@@ -32,7 +32,9 @@ import {
   freshnessChipLabel,
   shareCardHtml,
   onboardingChecklistHtml,
+  resultHeroHtml,
 } from "./format.js";
+import { landingPageHtml } from "./format-landing.js";
 
 Object.assign(globalThis, { Buffer });
 
@@ -389,7 +391,11 @@ function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAd
 }
 
 async function signInDevelopment(): Promise<void> {
-  if ((await runtimeEnvironment()) === "production") throw new Error("Development signer is disabled");
+  await runtimeEnvironment();
+  // Ephemeral keypair sign-in is allowed for DEMO DATA public demo and local development.
+  if (state.environment === "production" && !state.demoData) {
+    throw new Error("Development signer is disabled");
+  }
   const pair = nacl.sign.keyPair();
   const walletAddress = bs58.encode(pair.publicKey);
   const nonce = await api<{ message: string }>("/v1/auth/nonce", { method: "POST", body: JSON.stringify({ walletAddress }) });
@@ -414,6 +420,21 @@ async function signInWithWallet(): Promise<void> {
   persistSession({ token: result.token, mode: "wallet", walletAddress: result.walletAddress });
 }
 
+function clearSession(): void {
+  state.token = null;
+  state.authMode = null;
+  state.walletAddress = null;
+  state.teamVersionId = null;
+  state.teamMatchId = null;
+  sessionStorage.removeItem("kickr.session.token");
+  sessionStorage.removeItem("kickr.auth.mode");
+  sessionStorage.removeItem("kickr.auth.wallet");
+  sessionStorage.removeItem("kickr.dev.token");
+  sessionStorage.removeItem("kickr.dev.teamVersion");
+  sessionStorage.removeItem("kickr.dev.teamMatch");
+  sessionStorage.removeItem("kickr.dev.reservation");
+}
+
 function shell(title: string, body: string): string {
   const hash = route();
   const auth = state.token
@@ -423,23 +444,108 @@ function shell(title: string, body: string): string {
         ? `Signed in · ${shortWallet(state.walletAddress)}`
         : "Signed in"
     : "";
+  const matchesCurrent = hash === "#/" || hash === "#/matches" || hash.startsWith("#/matches");
   return `<div class="shell">
     <div class="top">
-      <div class="brand">KICKR</div>
+      <a class="brand" href="#/">KICKR</a>
       <div class="nav">
-        <a href="#/" ${hash === "#/" || hash.startsWith("#/matches") ? 'aria-current="page"' : ""}>Matches</a>
+        <a href="#/" ${matchesCurrent ? 'aria-current="page"' : ""}>Matches</a>
         <a href="#/my-contests" ${hash.startsWith("#/my-contests") ? 'aria-current="page"' : ""}>My Contests</a>
         <a href="#/leagues" ${hash.startsWith("#/leagues") ? 'aria-current="page"' : ""}>Leagues</a>
         <a href="#/profile" ${hash.startsWith("#/profile") || hash.startsWith("#/u/") ? 'aria-current="page"' : ""}>Profile</a>
+        <a href="#/account" ${hash.startsWith("#/account") ? 'aria-current="page"' : ""}>Account</a>
       </div>
       <div class="quiet auth-label" data-auth-label>${escapeText(auth)}</div>
     </div>
     ${demoBannerHtml()}
-    <h1>${title}</h1>
+    <h1 class="page-title">${title}</h1>
     ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
     ${body}
     <p class="note">FREE contests &amp; private leagues need no USDC. Credits are a squad budget, not money.${state.environment === "production" || state.demoData ? "" : " Paid Devnet contests stay available only in development."}</p>
   </div>`;
+}
+
+function setAuthNote(message: string): void {
+  for (const id of ["#auth-note", "#auth-note-final"]) {
+    const note = document.querySelector(id);
+    if (note) note.textContent = message;
+  }
+}
+
+function bindLandingAuth(): void {
+  const afterSignIn = () => {
+    location.hash = "#/";
+    void render();
+  };
+  const onPlayFree = () => {
+    void (async () => {
+      try {
+        await runtimeEnvironment();
+        if (state.demoData || state.environment !== "production") {
+          await signInDevelopment();
+        } else {
+          await signInWithWallet();
+        }
+        afterSignIn();
+      } catch (error) {
+        setAuthNote(error instanceof Error ? error.message : "Sign-in failed");
+      }
+    })();
+  };
+  const onExplore = () => {
+    const el = document.querySelector("#demo");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else location.hash = "#demo";
+  };
+  for (const id of ["#play-free", "#play-free-hero", "#play-free-final", "#play-free-xi"]) {
+    document.querySelector(id)?.addEventListener("click", onPlayFree);
+  }
+  for (const id of ["#explore-demo", "#explore-demo-hero"]) {
+    document.querySelector(id)?.addEventListener("click", onExplore);
+  }
+  document.querySelector("#signin-dev")?.addEventListener("click", () => {
+    void signInDevelopment().then(afterSignIn).catch((error) => {
+      setAuthNote(error instanceof Error ? error.message : "Sign-in failed");
+    });
+  });
+  document.querySelector("#signin-wallet")?.addEventListener("click", () => {
+    void signInWithWallet().then(afterSignIn).catch((error) => {
+      setAuthNote(error instanceof Error ? error.message : "Wallet sign-in failed");
+    });
+  });
+}
+
+async function renderLanding(): Promise<void> {
+  await runtimeEnvironment();
+  const production = state.environment === "production";
+  app.innerHTML = landingPageHtml({ demoData: state.demoData, production });
+  bindLandingAuth();
+}
+
+async function renderAccount(): Promise<void> {
+  const wallet = state.walletAddress ? shortWallet(state.walletAddress) : "—";
+  const mode = state.authMode === "wallet" ? "Wallet" : state.authMode === "dev" ? "Demo session" : "Signed in";
+  app.innerHTML = shell("Account", `
+    <article class="card account-card">
+      <div class="meta"><span>${escapeText(mode)}</span><span class="badge badge-free">FREE</span></div>
+      <p class="quiet">Signed in as</p>
+      <p class="mono">${escapeText(state.walletAddress ?? "—")}</p>
+      <div class="result-stats" style="margin-top:16px">
+        <div><span class="quiet">Wallet</span><strong>${escapeText(wallet)}</strong></div>
+        <div><span class="quiet">Mode</span><strong>${escapeText(mode)}</strong></div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <a class="ghost" href="#/profile">Open profile</a>
+        <button type="button" class="danger" id="sign-out">Sign out</button>
+      </div>
+      <p class="note">Signing out clears this browser session only. FREE contests keep no monetary balance.</p>
+    </article>
+  `);
+  document.querySelector("#sign-out")?.addEventListener("click", () => {
+    clearSession();
+    location.hash = "#/";
+    void render();
+  });
 }
 
 function loading(label = "Loading…"): string {
@@ -455,31 +561,19 @@ async function render(): Promise<void> {
   await runtimeEnvironment();
   const hash = route();
   try {
-    if (!state.token) {
-      app.innerHTML = shell(
-        "Fantasy football, free to play.",
-        `<p class="quiet">Build an XI, join FREE contests, climb the leaderboard.</p>
-         <div class="row">
-           <button class="primary" id="signin-wallet">Connect wallet</button>
-           ${(await runtimeEnvironment()) === "production" ? "" : '<button class="ghost" id="signin-dev">Sign in (development)</button>'}
-         </div>
-         <p class="note" id="auth-note"></p>`,
-      );
-      document.querySelector("#signin-dev")?.addEventListener("click", () => {
-        void signInDevelopment().then(render).catch((error) => {
-          const note = document.querySelector("#auth-note");
-          if (note) note.textContent = error instanceof Error ? error.message : "Sign-in failed";
-        });
-      });
-      document.querySelector("#signin-wallet")?.addEventListener("click", () => {
-        void signInWithWallet().then(render).catch((error) => {
-          const note = document.querySelector("#auth-note");
-          if (note) note.textContent = error instanceof Error ? error.message : "Wallet sign-in failed";
-        });
-      });
+    if (hash === "#/welcome" || hash === "#/landing") {
+      await renderLanding();
       return;
     }
-        if (hash === "#/leagues" || hash === "#/leagues/") {
+    if (!state.token) {
+      await renderLanding();
+      return;
+    }
+    if (hash === "#/account") {
+      await renderAccount();
+      return;
+    }
+    if (hash === "#/leagues" || hash === "#/leagues/") {
       await renderLeaguesHome();
       return;
     }
@@ -602,13 +696,15 @@ async function renderDetail(id: string): Promise<void> {
   const data = await api<{ match: MatchCard }>(`/matches/${id}`);
   const match = data.match;
   app.innerHTML = shell(escapeText(matchTitle(match)), `
-    <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}</div>
-    ${matchTile(match)}
-    <div class="row">
-      <a class="back-link" href="#/">← Matches</a>
-      <button class="ghost" id="to-contests">Contests</button>
-      <button class="primary" id="to-xi" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI locked"}</button>
-    </div>
+    <article class="card">
+      <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}<span>${match.canBuildXi ? "XI open" : "XI locked"}</span></div>
+      ${matchTile(match)}
+      <div class="row">
+        <a class="back-link" href="#/">← Matches</a>
+        <button class="ghost" id="to-contests">Contests</button>
+        <button class="primary" id="to-xi" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI locked"}</button>
+      </div>
+    </article>
   `);
   document.querySelector("#to-contests")?.addEventListener("click", () => { location.hash = `#/matches/${id}/contests`; });
   document.querySelector("#to-xi")?.addEventListener("click", () => { location.hash = `#/matches/${id}/xi`; });
@@ -923,7 +1019,9 @@ async function renderLeaderboard(contestId: string): Promise<void> {
     </div>
     ${matchLabel ? `<p class="quiet" style="margin:4px 0 12px">${escapeText(matchLabel)}</p>` : ""}
     ${staleNote}
-    <div class="leaderboard">${rowsHtml}</div>
+    <article class="card" style="margin-top:8px">
+      <div class="leaderboard">${rowsHtml}</div>
+    </article>
     <div class="row" style="margin-top:16px">
       <a class="back-link" href="#/my-contests">← My Contests</a>
       ${resultBtn}
@@ -1025,23 +1123,23 @@ async function renderResult(contestId: string): Promise<void> {
         ).join("")
       : empty("Leaderboard pending finalization.");
 
+    const hero = resultHeroHtml({
+      matchLabel,
+      contestLabel: `${contestLabel}${result.contestType ? ` · ${result.contestType}` : ""}`,
+      rank: result.rank,
+      totalEntries: result.totalEntries,
+      scoreLabel: score,
+      free: isFree,
+    });
     app.innerHTML = shell("Final result", `
-      <article class="card result-hero">
-        <div class="meta">
-          <span>${escapeText((result.stages ?? []).join(" → "))}</span>
-          <span class="badge ${isFree ? "badge-free" : "badge-paid"}">${escapeText(isFree ? "FREE" : (result.contestKind ?? "RESULT"))}</span>
-        </div>
-        <p class="quiet result-kicker">${escapeText(contestLabel)} · ${escapeText(result.contestType ?? "")}</p>
-        <h2>${escapeText(matchLabel)}</h2>
-        <p class="quiet">${result.match ? escapeText(result.match.competition) + " · " + escapeText(kickoffLabel(result.match.kickoffAt)) : ""}</p>
-        <div class="result-stats">
-          <div><span class="quiet">Final rank</span><strong class="rank-hero">#${result.rank ?? "—"}</strong><span class="quiet">of ${result.totalEntries}</span></div>
-          <div><span class="quiet">Final score</span><strong>${score}</strong><span class="quiet">pts</span></div>
-          <div><span class="quiet">Entrants</span><strong>${result.totalEntries}</strong></div>
-        </div>
-        ${claimHtml}
-        <div id="claim-target"></div>
-      </article>
+      <div class="meta" style="margin-bottom:8px">
+        <span class="quiet">${escapeText((result.stages ?? []).join(" → "))}</span>
+        <span class="badge ${isFree ? "badge-free" : "badge-paid"}">${escapeText(isFree ? "FREE" : (result.contestKind ?? "RESULT"))}</span>
+      </div>
+      ${hero}
+      ${isFree ? "" : claimHtml}
+      <div id="claim-target"></div>
+      <p class="quiet">${result.match ? escapeText(result.match.competition) + " · " + escapeText(kickoffLabel(result.match.kickoffAt)) : ""}</p>
 
       <article class="card">
         <div class="meta"><span>Your XI</span><span class="quiet">${result.creditsUsed != null ? `${result.creditsUsed} credits` : ""}</span></div>
@@ -1066,7 +1164,7 @@ async function renderResult(contestId: string): Promise<void> {
       <div class="row" style="margin-top:8px">
         <a class="quiet" href="#/contests/${contestId}/leaderboard">Full leaderboard</a>
         <a class="quiet" href="#/my-contests">My Contests</a>
-        <button class="ghost" id="load-share">Share FREE result</button>
+        <button class="primary" id="load-share">Share FREE result</button>
       </div>
     `);
     document.querySelector("#claim-btn")?.addEventListener("click", () => {
@@ -1211,12 +1309,17 @@ async function renderBuilder(matchId: string): Promise<void> {
     : `<ul class="errors">${validation.errors.map((e) => `<li>${escapeText(e.message)}</li>`).join("")}</ul>`;
 
   app.innerHTML = shell(readOnly ? "Your XI" : "Build your XI", `
-    <div class="row">
+    <div class="xi-toolbar">
       <a class="back-link" href="#/matches/${matchId}">← <strong>${escapeText(title)}</strong></a>
-      <span class="quiet">${escapeText(formation)} · ${selectedCount}/11 selected</span>
+      <div class="meta">
+        <span class="badge badge-state">${escapeText(formation)}</span>
+        <span class="quiet">${selectedCount}/11 selected</span>
+        ${state.draft.captainId ? '<span class="badge badge-c">C</span>' : ""}
+        ${state.draft.viceId ? '<span class="badge badge-vc">VC</span>' : ""}
+      </div>
     </div>
     ${lockBanner}
-    <article class="card">
+    <article class="card xi-hero-card">
       <div class="credits-panel">
         <div>
           <div class="quiet">Credits remaining</div>
@@ -1232,7 +1335,7 @@ async function renderBuilder(matchId: string): Promise<void> {
         <div class="line">${slot("GK")}</div>
       </div>
       ${validationHtml}
-      <div class="row" style="margin-top:14px">
+      <div class="xi-save-bar">
         ${readOnly
           ? `<span class="pill badge-paid">LOCKED XI</span>`
           : `<button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>`}
