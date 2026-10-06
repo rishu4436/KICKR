@@ -37,9 +37,17 @@ import {
 Object.assign(globalThis, { Buffer });
 
 const ONBOARD_KEY = "kickr.onboarding.seen";
+const LB_VIEWED_KEY = "kickr.onboarding.leaderboardViewed";
 /** Dismissal preference only — never used as completion source of truth. */
 function onboardingSeen(): boolean {
   return sessionStorage.getItem(ONBOARD_KEY) === "1";
+}
+/** Explicit client event: user opened a leaderboard view. */
+function leaderboardViewed(): boolean {
+  return sessionStorage.getItem(LB_VIEWED_KEY) === "1";
+}
+function markLeaderboardViewed(): void {
+  sessionStorage.setItem(LB_VIEWED_KEY, "1");
 }
 function dismissOnboarding(): void {
   sessionStorage.setItem(ONBOARD_KEY, "1");
@@ -135,15 +143,8 @@ async function loadOnboardingProgress(): Promise<{
     const freeJoined =
       mine.contests.some((c) => c.contestKind === "FREE") ||
       leagues.leagues.some((l) => l.youJoined || l.isOwner);
-    const leaderboardReady =
-      mine.contests.some(
-        (c) =>
-          c.contestKind === "FREE" &&
-          (c.hasFinalResult || c.lifecycleBucket === "live" || c.lifecycleBucket === "completed"),
-      ) ||
-      leagues.leagues.some(
-        (l) => (l.youJoined || l.isOwner) && (l.lifecycleBucket === "live" || l.lifecycleBucket === "completed"),
-      );
+    // Leaderboard step requires an explicit view event — never infer from join/live/completed.
+    const leaderboardReady = leaderboardViewed();
     return { signedIn, matchSelected, xiSaved, captainSet, viceSet, freeJoined, leaderboardReady };
   } catch {
     return empty;
@@ -809,60 +810,46 @@ async function renderLeaderboard(contestId: string): Promise<void> {
       /* keep defaults */
     }
   }
-  let rowsHtml = empty("Leaderboard will appear once scoring starts.");
   let updatedAt: string | null = null;
   let freshness: string | null = null;
   let staleNote = "";
+  let rowsHtml: string;
   try {
-    const free = await api<{ result: { rows: Array<{ entryId: string; wallet: string; finalScoreMilliPoints: number; rank: number }> } | null }>(
-      `/contests/${contestId}/free-result`,
-    );
-    if (free.result?.rows?.length) {
-      freshness = "FINAL";
-      rowsHtml = free.result.rows.map((row) =>
+    const board = await api<{
+      freshness?: string;
+      timestamps?: { updatedAt?: string };
+      leaderboard: Array<{
+        entryId: string;
+        contestId: string;
+        wallet: string;
+        milliPoints: number;
+        rank: number;
+        priorRank?: number | null;
+        scoreDelta?: number | null;
+      }>;
+    }>(`/contests/${contestId}/leaderboard`);
+    freshness = board.freshness ?? null;
+    updatedAt = board.timestamps?.updatedAt ?? null;
+    // Server already contest-scopes + re-ranks; never display global match ranks.
+    if (board.leaderboard.length) {
+      rowsHtml = board.leaderboard.map((row) =>
         lbRowHtml({
           rank: row.rank,
           label: shortWallet(row.wallet),
-          milliPoints: row.finalScoreMilliPoints,
+          milliPoints: row.milliPoints,
           you: row.wallet === state.walletAddress,
+          priorRank: row.priorRank,
+          scoreDelta: row.scoreDelta,
         }),
       ).join("");
-    } else if (card.matchId) {
-      const board = await api<{
-        freshness?: string;
-        timestamps?: { updatedAt?: string };
-        leaderboard: Array<{
-          entryId: string;
-          contestId: string;
-          wallet: string;
-          milliPoints: number;
-          rank: number;
-          priorRank?: number | null;
-          scoreDelta?: number | null;
-        }>;
-      }>(`/matches/${card.matchId}/leaderboard`);
-      freshness = board.freshness ?? null;
-      updatedAt = board.timestamps?.updatedAt ?? null;
-      const filtered = board.leaderboard.filter((row) => row.contestId === contestId);
-      if (filtered.length) {
-        rowsHtml = filtered.map((row) =>
-          lbRowHtml({
-            rank: row.rank,
-            label: shortWallet(row.wallet),
-            milliPoints: row.milliPoints,
-            you: row.wallet === state.walletAddress,
-            priorRank: row.priorRank,
-            scoreDelta: row.scoreDelta,
-          }),
-        ).join("");
-      } else {
-        rowsHtml = empty("No scored entries yet for this contest.");
-      }
-      staleNote = freshnessBannerHtml(freshness);
+    } else {
+      rowsHtml = empty("No scored entries yet for this contest.");
     }
+    staleNote = freshnessBannerHtml(freshness);
   } catch {
     rowsHtml = empty("Could not load leaderboard.");
   }
+  markLeaderboardViewed();
   const bucket = resolveLifecycle(card);
   const live = bucket === "live";
   const resultBtn = bucket === "completed"
@@ -1288,7 +1275,7 @@ async function saveXi(matchId: string, existingTeamId: string | null = null): Pr
   const pending = readLeagueReturn();
   if (pending && pending.matchId === matchId) {
     const note = document.querySelector("#saved");
-    if (note) note.textContent = `Saved XI v${saved.version.version}. Returning to league join…`;
+    if (note) note.textContent = `Saved XI v${saved.version.version}. Returning to confirm join…`;
     location.hash = `#/leagues/join/${encodeURIComponent(pending.inviteCode)}`;
     return;
   }
@@ -1439,12 +1426,14 @@ async function renderLeagueJoin(code: string): Promise<void> {
       <div class="meta"><span class="badge badge-free">FREE</span><span>${league.memberCount}/${league.capacity}</span><span>${escapeText(league.status)}</span></div>
       <h3>${escapeText(league.name)}</h3>
       <p class="quiet">Invite <span class="mono">${escapeText(league.inviteCode)}</span> · ${escapeText(league.lifecycleBucket)}</p>
-      ${needsXi ? `<p class="note">An XI for this match is required before you can join. Build your XI, then you will return here automatically.</p>` : `<p class="note">Uses your saved XI for this match. No USDC. One-tap join.</p>`}
+      ${needsXi
+        ? `<p class="note">An XI for this match is required before you can join. Build your XI, then you will return here to confirm.</p>`
+        : `<p class="note">XI ready for this match. Confirm below to join — nothing is submitted until you press Join League. No USDC.</p>`}
       ${league.youJoined ? `<p class="note">You already joined this league.</p>` : ""}
       <div class="row">
         ${needsXi
           ? `<button class="primary" id="build-xi-return">Build XI for this match</button>`
-          : `<button class="primary" id="confirm-join" ${league.youJoined ? "disabled" : ""}>${league.youJoined ? "Already joined" : "Join league"}</button>`}
+          : `<button class="primary" id="confirm-join" ${league.youJoined ? "disabled" : ""}>${league.youJoined ? "Already joined" : "Join League"}</button>`}
         <a class="back-link" href="#/leagues">Back</a>
       </div>
       <p class="quiet" id="join-note"></p>
@@ -1477,23 +1466,10 @@ async function renderLeagueJoin(code: string): Promise<void> {
     })();
   });
 
-  // Auto one-action join when returning from XI builder with context preserved.
+  // Returning from XI: show confirmation only — never auto-join.
   if (!league.youJoined && hasXi && readLeagueReturn()?.inviteCode === league.inviteCode) {
     const note = document.querySelector("#join-note");
-    if (note) note.textContent = "XI ready — joining…";
-    void (async () => {
-      try {
-        const joined = await api<{ league: LeagueCard }>("/leagues/join", {
-          method: "POST",
-          headers: { "idempotency-key": `lgj-auto-${Date.now()}` },
-          body: JSON.stringify({ inviteCode: league.inviteCode, teamVersionId: state.teamVersionId }),
-        });
-        clearLeagueReturn();
-        location.hash = `#/leagues/${joined.league.id}`;
-      } catch (error) {
-        if (note) note.textContent = error instanceof Error ? error.message : "Join failed";
-      }
-    })();
+    if (note) note.textContent = "XI saved. Press Join League to confirm.";
   }
 }
 
@@ -1567,6 +1543,7 @@ async function renderLeagueLeaderboard(id: string): Promise<void> {
   document.querySelector("#league-share")?.addEventListener("click", () => {
     location.hash = `#/share/league/${id}`;
   });
+  markLeaderboardViewed();
 }
 
 async function renderShareContest(contestId: string): Promise<void> {

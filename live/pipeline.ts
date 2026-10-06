@@ -29,6 +29,7 @@ import {
   computeScoreSnapshotId,
   eventLogFingerprint,
 } from "./score-snapshot.js";
+import { compareTiedEntries } from "../settlement/tie-policy.js";
 
 export interface UnresolvedProviderEvent {
   id: string;
@@ -613,7 +614,12 @@ export class LiveScoringPipeline {
           milliPoints: row.milliPoints,
         };
       })
-      .sort((a, b) => b.milliPoints - a.milliPoints || a.entryId.localeCompare(b.entryId))
+      .sort((a, b) =>
+        compareTiedEntries(
+          { finalScoreMilliPoints: a.milliPoints, entryId: a.entryId },
+          { finalScoreMilliPoints: b.milliPoints, entryId: b.entryId },
+        ),
+      )
       .map((row, index) => {
         const prior = priorByEntry.get(row.entryId);
         return {

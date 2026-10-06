@@ -4,6 +4,7 @@ import type { Principal } from "../auth/types.js";
 import type { Permission } from "../rbac/permissions.js";
 import { AppError } from "../shared/errors.js";
 import type { AppDeps, AppEnv } from "./server.js";
+import { DEV_V1_SCALE } from "../domain/scoring/dev-v1.js";
 import { consumeLimit, replayOrRun } from "./guard.js";
 
 const uuidSchema = z.string().uuid();
@@ -140,6 +141,50 @@ export function registerContestRoutes(
     const principal = await authenticate(c);
     const contests = await deps.contests.listMyContests(principal.walletAddress);
     return c.json({ contests });
+  });
+
+  app.get("/contests/:id/leaderboard", async (c) => {
+    await authenticate(c);
+    const contestId = c.req.param("id");
+    if (!uuidSchema.safeParse(contestId).success) {
+      throw new AppError("VALIDATION", 400, "Contest id must be a uuid");
+    }
+    const contest = await deps.contests.getContest(contestId);
+    const free = await deps.contests.getFreeResult(contestId);
+    if (free?.rows?.length) {
+      return c.json({
+        contestId,
+        matchId: free.matchId,
+        freshness: "FINAL",
+        timestamps: { updatedAt: free.finalizedAt, lastEventAt: free.finalizedAt },
+        scale: DEV_V1_SCALE,
+        scoreSnapshotId: null,
+        eventCount: free.rows.length,
+        leaderboard: free.rows.map((row) => ({
+          entryId: row.entryId,
+          contestId,
+          teamVersionId: row.teamVersionId,
+          wallet: row.wallet,
+          milliPoints: row.finalScoreMilliPoints,
+          rank: row.rank,
+          priorRank: null,
+          scoreDelta: null,
+        })),
+        note: "Final FREE contest ranks (entry_id_asc ties). Live board unused once finalized.",
+      });
+    }
+    const live = deps.live;
+    if (!live) {
+      throw new AppError("NOT_FOUND", 404, "Live scoring is not available");
+    }
+    const view = await live.getContestLeaderboard(
+      { contestId, matchId: contest.matchId },
+      context(deps, c),
+    );
+    if (!view) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return c.json(view);
   });
 
   app.get("/contests/:id/free-result", async (c) => {

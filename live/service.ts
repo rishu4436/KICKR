@@ -14,6 +14,7 @@ import {
   eventLogFingerprint,
   isScoreSnapshotFresh,
 } from "./score-snapshot.js";
+import { filterAndRerankContestRows } from "./contest-rank.js";
 
 export class LiveScoringService {
   readonly cache: LiveScoreCache;
@@ -232,6 +233,106 @@ export class LiveScoringService {
   }
 
   /**
+   * FREE/paid contest leaderboard: ranks only entries for the selected contest.
+   * Match-level Redis board may mix contests; this view always re-ranks within contest.
+   * Postgres event log + contest entry ids are the scoreSnapshotId; Redis is cache-only.
+   */
+  async getContestLeaderboard(
+    input: {
+      contestId: string;
+      matchId: string;
+    },
+    ctx: RequestContext,
+  ) {
+    const match = await this.football.getMatch(input.matchId);
+    if (!match) {
+      return null;
+    }
+    const events = await this.store.listEvents(input.matchId);
+    const fingerprint = eventLogFingerprint(events);
+    const matchBoard = await this.getLeaderboard(input.matchId, ctx);
+    if (!matchBoard) {
+      return null;
+    }
+    const contestRows = matchBoard.leaderboard.filter((row) => row.contestId === input.contestId);
+    const entryIds = contestRows.map((row) => row.entryId).sort();
+    const expectedSnapshotId = computeScoreSnapshotId({
+      eventCount: fingerprint.eventCount,
+      lastEventAt: fingerprint.lastEventAt,
+      lastEventId: fingerprint.lastEventId,
+      entryIds,
+    });
+
+    let contestBoard = await this.cache.readContestLeaderboard(input.contestId);
+    const priorByEntry = new Map(
+      (contestBoard?.rows ?? []).map((row) => {
+        const entryId = row.entryId ?? row.teamId ?? "";
+        return [entryId, { rank: row.rank, milliPoints: row.milliPoints }] as const;
+      }),
+    );
+    if (!contestBoard || !isScoreSnapshotFresh(contestBoard.scoreSnapshotId, expectedSnapshotId)) {
+      await this.cache.clearContestLeaderboard(input.contestId);
+      const ranked = filterAndRerankContestRows(matchBoard.leaderboard, input.contestId).map((rankedRow) => {
+        const prior = priorByEntry.get(rankedRow.entryId);
+        const source = rankedRow.source;
+        return {
+          entryId: source.entryId,
+          contestId: source.contestId,
+          teamVersionId: source.teamVersionId,
+          wallet: source.wallet,
+          milliPoints: source.milliPoints,
+          rank: rankedRow.rank,
+          priorRank: prior?.rank ?? null,
+          scoreDelta: prior ? source.milliPoints - prior.milliPoints : source.scoreDelta ?? null,
+        };
+      });
+      contestBoard = {
+        matchId: input.matchId,
+        contestId: input.contestId,
+        rows: ranked.map((row) => ({
+          entryId: row.entryId,
+          contestId: row.contestId,
+          teamVersionId: row.teamVersionId,
+          wallet: row.wallet,
+          milliPoints: row.milliPoints,
+          rank: row.rank,
+          priorRank: row.priorRank,
+          scoreDelta: row.scoreDelta,
+          teamId: row.entryId,
+          accountId: row.wallet,
+        })),
+        updatedAt: ctx.now.toISOString(),
+        freshness: matchBoard.freshness,
+        scoreSnapshotId: expectedSnapshotId,
+        eventCount: fingerprint.eventCount,
+        lastEventAt: fingerprint.lastEventAt,
+      };
+      await this.cache.writeContestLeaderboard(input.contestId, contestBoard);
+    }
+
+    return {
+      contestId: input.contestId,
+      matchId: input.matchId,
+      freshness: contestBoard.freshness,
+      timestamps: { updatedAt: contestBoard.updatedAt, lastEventAt: contestBoard.lastEventAt },
+      scale: DEV_V1_SCALE,
+      scoreSnapshotId: contestBoard.scoreSnapshotId,
+      eventCount: contestBoard.eventCount,
+      leaderboard: contestBoard.rows.map((row) => ({
+        entryId: row.entryId ?? row.teamId ?? "",
+        contestId: row.contestId || input.contestId,
+        teamVersionId: row.teamVersionId ?? "",
+        wallet: row.wallet || row.accountId || "",
+        milliPoints: row.milliPoints,
+        rank: row.rank,
+        priorRank: row.priorRank ?? null,
+        scoreDelta: row.scoreDelta ?? null,
+      })),
+      note: "Contest ranks include only this contest's entries (entry_id_asc ties). Redis is cache-only.",
+    };
+  }
+
+  /**
    * Private league leaderboard reuses the match pipeline scores.
    * Postgres event log + league membership entry ids are the scoreSnapshotId.
    * Stale Redis league cache is discarded when the snapshot diverges.
@@ -268,13 +369,13 @@ export class LiveScoringService {
         return null;
       }
       const memberSet = new Set(entryIds);
-      const filtered = matchBoard.leaderboard
-        .filter((row) => row.contestId === input.leagueId && memberSet.has(row.entryId))
-        .sort((a, b) => b.milliPoints - a.milliPoints || a.entryId.localeCompare(b.entryId))
-        .map((row, index) => ({
-          ...row,
-          rank: index + 1,
-        }));
+      const scoped = matchBoard.leaderboard.filter(
+        (row) => row.contestId === input.leagueId && memberSet.has(row.entryId),
+      );
+      const filtered = filterAndRerankContestRows(scoped, input.leagueId).map((ranked) => ({
+        ...ranked.source,
+        rank: ranked.rank,
+      }));
       leagueBoard = {
         matchId: input.matchId,
         contestId: input.leagueId,

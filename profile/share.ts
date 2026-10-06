@@ -21,6 +21,7 @@ export interface ShareResultCard {
     title: string;
     description: string;
     type: "website";
+    image: string;
   };
 }
 
@@ -80,6 +81,7 @@ export function buildShareCard(input: {
       title,
       description,
       type: "website",
+      image: `${sharePath.replace(/\/$/, "")}/og.png`,
     },
   };
 }
@@ -111,7 +113,12 @@ export function renderShareHtmlPage(input: {
   <meta property="og:description" content="${esc(card.og.description)}" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="${esc(input.canonicalPath)}" />
-  <meta name="twitter:card" content="summary" />
+  <meta property="og:image" content="${esc(card.og.image)}" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="600" />
+  <meta property="og:image:height" content="315" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="${esc(card.og.image)}" />
   <meta name="twitter:title" content="${esc(card.og.title)}" />
   <meta name="twitter:description" content="${esc(card.og.description)}" />
   <meta name="kickr:free" content="true" />
