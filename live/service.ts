@@ -9,6 +9,11 @@ import { LiveMetrics } from "./metrics.js";
 import { LiveScoringPipeline, type ContestScoringSource, type LivePipelineStore } from "./pipeline.js";
 import { DEV_V1_RULESET, DEV_V1_SCALE } from "../domain/scoring/dev-v1.js";
 import { derivePitchStates, type LineupSeed } from "./lineup.js";
+import {
+  computeScoreSnapshotId,
+  eventLogFingerprint,
+  isScoreSnapshotFresh,
+} from "./score-snapshot.js";
 
 export class LiveScoringService {
   readonly cache: LiveScoreCache;
@@ -47,8 +52,9 @@ export class LiveScoringService {
     if (!match) {
       return null;
     }
+    const expected = await this.expectedScoreSnapshotId(matchId);
     let cached = await this.cache.readMatch(matchId);
-    if (!cached) {
+    if (!cached || !isScoreSnapshotFresh(cached.scoreSnapshotId, expected.scoreSnapshotId)) {
       const rebuilt = await this.pipeline.rebuildFromEvents(matchId, ctx);
       cached = await this.cache.readMatch(matchId);
       if (!cached) {
@@ -61,6 +67,7 @@ export class LiveScoringService {
           playerScores: rebuilt.playerScores,
           scale: DEV_V1_SCALE,
           ruleset: { name: DEV_V1_RULESET.name, status: DEV_V1_RULESET.status },
+          scoreSnapshotId: expected.scoreSnapshotId,
           dataHealth: {
             connected: rebuilt.freshness !== "DATA_ERROR",
             delayed: rebuilt.freshness === "STALE",
@@ -85,6 +92,7 @@ export class LiveScoringService {
       playerScores: cached.playerScores,
       scale: DEV_V1_SCALE,
       ruleset: { name: DEV_V1_RULESET.name, status: DEV_V1_RULESET.status },
+      scoreSnapshotId: cached.scoreSnapshotId ?? expected.scoreSnapshotId,
       dataHealth: {
         connected: cached.freshness !== "DATA_ERROR",
         delayed: cached.freshness === "STALE",
@@ -135,50 +143,91 @@ export class LiveScoringService {
     };
   }
 
+  /**
+   * Postgres event log + contest entries are authoritative.
+   * Redis leaderboard is served only when scoreSnapshotId still matches.
+   * A newer scoring wave (new events or new entries) invalidates the cache automatically —
+   * callers never need a harness-forced rebuild for freshness.
+   */
   async getLeaderboard(matchId: string, ctx: RequestContext) {
     const match = await this.football.getMatch(matchId);
     if (!match) {
       return null;
     }
+    const expected = await this.expectedScoreSnapshotId(matchId);
     let board = await this.cache.readLeaderboard(matchId);
-    let entryLeaderboard: Array<{
-      entryId: string;
-      contestId: string;
-      teamVersionId: string;
-      wallet: string;
-      milliPoints: number;
-      rank: number;
-    }> | null = null;
-    if (!board) {
+    let rebuiltLeaderboard: Awaited<ReturnType<LiveScoringPipeline["rebuildFromEvents"]>>["leaderboard"] | null =
+      null;
+    if (!board || !isScoreSnapshotFresh(board.scoreSnapshotId, expected.scoreSnapshotId)) {
       const rebuilt = await this.pipeline.rebuildFromEvents(matchId, ctx);
-      entryLeaderboard = rebuilt.leaderboard;
-      board = {
-        matchId,
-        contestId: rebuilt.leaderboard[0]?.contestId ?? null,
-        rows: rebuilt.leaderboard.map((row) => ({
-          teamId: row.entryId,
-          accountId: row.wallet,
-          milliPoints: row.milliPoints,
-          rank: row.rank,
-        })),
-        updatedAt: ctx.now.toISOString(),
-        freshness: rebuilt.freshness,
-      };
+      rebuiltLeaderboard = rebuilt.leaderboard;
+      board = await this.cache.readLeaderboard(matchId);
+      if (!board) {
+        board = {
+          matchId,
+          contestId: rebuilt.leaderboard[0]?.contestId ?? null,
+          rows: rebuilt.leaderboard.map((row) => ({
+            entryId: row.entryId,
+            contestId: row.contestId,
+            teamVersionId: row.teamVersionId,
+            wallet: row.wallet,
+            milliPoints: row.milliPoints,
+            rank: row.rank,
+            priorRank: row.priorRank,
+            scoreDelta: row.scoreDelta,
+            teamId: row.entryId,
+            accountId: row.wallet,
+          })),
+          updatedAt: ctx.now.toISOString(),
+          freshness: rebuilt.freshness,
+          scoreSnapshotId: expected.scoreSnapshotId,
+          eventCount: expected.eventCount,
+          lastEventAt: expected.lastEventAt,
+        };
+      }
     }
+    const leaderboard =
+      rebuiltLeaderboard ??
+      board.rows.map((row) => ({
+        entryId: row.entryId ?? row.teamId ?? "",
+        contestId: row.contestId || board?.contestId || "",
+        teamVersionId: row.teamVersionId ?? "",
+        wallet: row.wallet || row.accountId || "",
+        milliPoints: row.milliPoints,
+        rank: row.rank,
+        priorRank: row.priorRank ?? null,
+        scoreDelta: row.scoreDelta ?? null,
+      }));
     return {
       matchId,
       freshness: board.freshness,
-      timestamps: { updatedAt: board.updatedAt },
+      timestamps: { updatedAt: board.updatedAt, lastEventAt: board.lastEventAt ?? expected.lastEventAt },
       scale: DEV_V1_SCALE,
-      leaderboard: entryLeaderboard ?? board.rows.map((row) => ({
-        entryId: row.teamId,
-        contestId: board?.contestId ?? "",
-        teamVersionId: "",
-        wallet: row.accountId,
-        milliPoints: row.milliPoints,
-        rank: row.rank,
-      })),
-      note: "Contest leaderboard rows are keyed by contest entry and frozen team_version_id, not fantasy team latest.",
+      scoreSnapshotId: board.scoreSnapshotId ?? expected.scoreSnapshotId,
+      eventCount: board.eventCount ?? expected.eventCount,
+      leaderboard,
+      note: "Contest leaderboard rows are keyed by contest entry and frozen team_version_id, not fantasy team latest. Cache is invalidated when scoreSnapshotId diverges from Postgres.",
+    };
+  }
+
+  /** Authoritative score-snapshot etag from Postgres event log + scoring entries. */
+  private async expectedScoreSnapshotId(matchId: string): Promise<{
+    scoreSnapshotId: string;
+    eventCount: number;
+    lastEventAt: string | null;
+  }> {
+    const events = await this.store.listEvents(matchId);
+    const fingerprint = eventLogFingerprint(events);
+    const entryIds = await this.pipeline.listScoringEntryIds(matchId);
+    return {
+      scoreSnapshotId: computeScoreSnapshotId({
+        eventCount: fingerprint.eventCount,
+        lastEventAt: fingerprint.lastEventAt,
+        lastEventId: fingerprint.lastEventId,
+        entryIds,
+      }),
+      eventCount: fingerprint.eventCount,
+      lastEventAt: fingerprint.lastEventAt,
     };
   }
 

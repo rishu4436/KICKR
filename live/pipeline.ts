@@ -25,6 +25,10 @@ import { derivePitchStates, eligibleForGoalConceded, type LineupSeed } from "./l
 import type { LiveMetrics } from "./metrics.js";
 import { explainEventContribution } from "./contribution.js";
 import { computeFreshness } from "./freshness.js";
+import {
+  computeScoreSnapshotId,
+  eventLogFingerprint,
+} from "./score-snapshot.js";
 
 export interface UnresolvedProviderEvent {
   id: string;
@@ -83,6 +87,8 @@ export interface RecomputeResult {
     wallet: string;
     milliPoints: number;
     rank: number;
+    priorRank: number | null;
+    scoreDelta: number | null;
   }>;
   personalTeamScores: TeamLiveScoreCache[];
   contestEntryScores: Array<TeamLiveScoreCache & { entryId: string; contestId: string; teamVersionId: string }>;
@@ -125,6 +131,18 @@ export class LiveScoringPipeline {
 
   getUnresolved(): UnresolvedProviderEvent[] {
     return this.unresolved.map((row) => ({ ...row, rawPayload: { ...row.rawPayload } }));
+  }
+
+  /** Entry ids that participate in contest live scoring (PENDING/CONFIRMED). */
+  async listScoringEntryIds(matchId: string): Promise<string[]> {
+    if (!this.contestSource) {
+      return [];
+    }
+    const entries = await this.contestSource.listEntriesForMatch(matchId);
+    return entries
+      .filter((entry) => entry.status === "PENDING" || entry.status === "CONFIRMED")
+      .map((entry) => entry.entryId)
+      .sort();
   }
 
   async acceptNormalized(
@@ -570,6 +588,20 @@ export class LiveScoringPipeline {
       }
     }
 
+    const priorBoard = await this.cache.readLeaderboard(matchId);
+    const priorByEntry = new Map(
+      (priorBoard?.rows ?? []).map((row) => {
+        const entryId = row.entryId ?? row.teamId ?? "";
+        return [
+          entryId,
+          {
+            rank: row.rank,
+            milliPoints: row.milliPoints,
+          },
+        ] as const;
+      }),
+    );
+
     const leaderboard = contestEntryScores
       .map((row) => {
         const entry = contestEntries.find((item) => item.entryId === row.entryId);
@@ -582,14 +614,24 @@ export class LiveScoringPipeline {
         };
       })
       .sort((a, b) => b.milliPoints - a.milliPoints || a.entryId.localeCompare(b.entryId))
-      .map((row, index) => ({ ...row, rank: index + 1 }));
+      .map((row, index) => {
+        const prior = priorByEntry.get(row.entryId);
+        return {
+          ...row,
+          rank: index + 1,
+          priorRank: prior?.rank ?? null,
+          scoreDelta: prior ? row.milliPoints - prior.milliPoints : null,
+        };
+      });
 
-    const lastEventAt = events.reduce<string | null>((latest, event) => {
-      if (!latest || event.timestamp > latest) {
-        return event.timestamp;
-      }
-      return latest;
-    }, null);
+    const fingerprint = eventLogFingerprint(events);
+    const lastEventAt = fingerprint.lastEventAt;
+    const scoreSnapshotId = computeScoreSnapshotId({
+      eventCount: fingerprint.eventCount,
+      lastEventAt: fingerprint.lastEventAt,
+      lastEventId: fingerprint.lastEventId,
+      entryIds: contestEntryScores.map((row) => row.entryId),
+    });
     const metricsSnap = this.metrics.snapshot();
     const freshness = computeFreshness({
       matchStatus: match.status,
@@ -610,19 +652,30 @@ export class LiveScoringPipeline {
         updatedAt: ctx.now.toISOString(),
       })),
       updatedAt: ctx.now.toISOString(),
+      scoreSnapshotId,
     };
     await this.cache.writeMatch(matchCache);
     await this.cache.writeLeaderboard({
       matchId,
       contestId: leaderboard[0]?.contestId ?? null,
       rows: leaderboard.map((row) => ({
-        teamId: row.entryId,
-        accountId: row.wallet,
+        entryId: row.entryId,
+        contestId: row.contestId,
+        teamVersionId: row.teamVersionId,
+        wallet: row.wallet,
         milliPoints: row.milliPoints,
         rank: row.rank,
+        priorRank: row.priorRank,
+        scoreDelta: row.scoreDelta,
+        // Compat aliases for older readers
+        teamId: row.entryId,
+        accountId: row.wallet,
       })),
       updatedAt: ctx.now.toISOString(),
       freshness,
+      scoreSnapshotId,
+      eventCount: fingerprint.eventCount,
+      lastEventAt,
     });
 
     this.metrics.recordRecompute();
@@ -679,11 +732,16 @@ export class LiveScoringPipeline {
     const playerIds = [
       ...new Set(events.flatMap((event) => [event.primaryPlayerId, event.secondaryPlayerId].filter(Boolean) as string[])),
     ];
+    // Keep prior leaderboard briefly so recompute can emit rank movement / score delta.
+    const priorBoard = await this.cache.readLeaderboard(matchId);
     await this.cache.clearMatch(
       matchId,
       playerIds,
       teams.map((team) => team.id),
     );
+    if (priorBoard) {
+      await this.cache.writeLeaderboard(priorBoard);
+    }
     this.metrics.recordRedisRebuild();
     return this.recomputeMatch(matchId, ctx);
   }

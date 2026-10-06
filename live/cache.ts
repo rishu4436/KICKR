@@ -32,13 +32,26 @@ export interface MatchLiveScoreCache {
   providerName: string | null;
   playerScores: PlayerLiveScoreCache[];
   updatedAt: string;
+  /** Etag over event log + scoring entry set. Stale when postgres diverges. */
+  scoreSnapshotId?: string;
 }
 
 export interface LeaderboardCacheRow {
-  teamId: string;
-  accountId: string;
+  /** Contest entry id (leaderboard row key). */
+  entryId: string;
+  contestId: string;
+  teamVersionId: string;
+  wallet: string;
   milliPoints: number;
   rank: number;
+  /** Prior rank from previous scoring wave, when available. */
+  priorRank: number | null;
+  /** milliPoints delta vs previous scoring wave, when available. */
+  scoreDelta: number | null;
+  /** @deprecated Prefer entryId. Kept for older cache documents. */
+  teamId?: string;
+  /** @deprecated Prefer wallet. */
+  accountId?: string;
 }
 
 export interface LeaderboardCache {
@@ -47,6 +60,10 @@ export interface LeaderboardCache {
   rows: LeaderboardCacheRow[];
   updatedAt: string;
   freshness: LiveFreshness;
+  /** Deterministic etag — must match computeScoreSnapshotId from postgres. */
+  scoreSnapshotId: string;
+  eventCount: number;
+  lastEventAt: string | null;
 }
 
 export class LiveScoreCache {

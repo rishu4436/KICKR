@@ -188,6 +188,12 @@ export async function appendLateLocalDevEvents(
     });
     if (result === "inserted") inserted += 1;
   }
+  // Scoring pipeline owns cache writes. New events must rebuild so Redis never
+  // serves a pre-wave leaderboard (scoreSnapshotId comparison also self-heals on read).
+  if (inserted > 0) {
+    const ctx: RequestContext = { now: deps.clock(), correlationId: `dev-e2e-late-score-${matchId}` };
+    await deps.live.pipeline.rebuildFromEvents(matchId, ctx);
+  }
   return { inserted };
 }
 
@@ -208,7 +214,8 @@ export async function rebuildLiveScores(
   const ctx: RequestContext = { now: deps.clock(), correlationId: `dev-e2e-score-${matchId}` };
   const match = await deps.football.getMatch(matchId);
   if (!match) throw new AppError("NOT_FOUND", 404, "Match not found for scoring");
-  // Force the real pipeline path (bypass live leaderboard cache) so late events re-score.
+  // Explicit recompute (same path as production scoring). getLeaderboard also
+  // invalidates when scoreSnapshotId diverges from Postgres — no special bypass.
   const rebuilt = await deps.live.pipeline.rebuildFromEvents(matchId, ctx);
   return { leaderboard: rebuilt.leaderboard };
 }

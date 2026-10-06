@@ -22,6 +22,13 @@ import {
   type ContestPrimaryCta,
 } from "../../domain/football/presentation.js";
 import { validateFantasyTeam } from "../../domain/football/validate-team.js";
+import {
+  escapeText,
+  initials,
+  matchTitle,
+  playerChip,
+  lbRowHtml,
+} from "./format.js";
 
 Object.assign(globalThis, { Buffer });
 
@@ -132,10 +139,6 @@ function route(): string {
   return location.hash || "#/";
 }
 
-function escapeText(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-}
-
 function kickoffLabel(iso: string): string {
   return new Intl.DateTimeFormat(undefined, {
     weekday: "short",
@@ -153,8 +156,23 @@ function formatUsdc(baseUnits: number): string {
   return `${whole}.${String(fraction).padStart(6, "0").replace(/0+$/, "")}`;
 }
 
-function initials(name: string): string {
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("") || "FC";
+function statusChip(status: string, bucket?: string): string {
+  const label = status.replaceAll("_", " ");
+  const kind = bucket === "live" || status === "LIVE" || status === "HALFTIME"
+    ? "live"
+    : bucket === "completed" || status === "FINAL" || status === "FULL_TIME" || status === "DATA_FINALIZING"
+      ? "completed"
+      : "upcoming";
+  return `<span class="status-chip ${kind}">${escapeText(label)}</span>`;
+}
+
+function formatUpdated(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -242,7 +260,7 @@ function shell(title: string, body: string): string {
 }
 
 function loading(label = "Loading…"): string {
-  return `<div class="loading">${escapeText(label)}</div>`;
+  return `<div class="loading">${escapeText(label)}</div><div class="skeleton" aria-hidden="true"></div>`;
 }
 
 function empty(label: string): string {
@@ -310,9 +328,9 @@ async function render(): Promise<void> {
 
 function matchTile(match: MatchCard): string {
   return `<div class="match-tile">
-    <div class="team-side"><div class="crest">${escapeText(initials(match.home.shortName))}</div><div><strong>${escapeText(match.home.shortName)}</strong><div class="quiet">${escapeText(match.home.name)}</div></div></div>
-    <div class="kickoff">${escapeText(kickoffLabel(match.kickoffAt))}<div>${escapeText(match.status.replaceAll("_", " "))}</div></div>
-    <div class="team-side away"><div class="crest">${escapeText(initials(match.away.shortName))}</div><div><strong>${escapeText(match.away.shortName)}</strong><div class="quiet">${escapeText(match.away.name)}</div></div></div>
+    <div class="team-side"><div class="crest">${escapeText(initials(match.home.name))}</div><div><strong>${escapeText(match.home.name)}</strong><div class="quiet">${escapeText(match.home.shortName)}</div></div></div>
+    <div class="kickoff">${escapeText(kickoffLabel(match.kickoffAt))}<div style="margin-top:6px">${statusChip(match.status, match.bucket)}</div></div>
+    <div class="team-side away"><div class="crest">${escapeText(initials(match.away.name))}</div><div><strong>${escapeText(match.away.name)}</strong><div class="quiet">${escapeText(match.away.shortName)}</div></div></div>
   </div>`;
 }
 
@@ -322,11 +340,11 @@ async function renderList(): Promise<void> {
   state.creditCap = data.creditCap;
   state.maxPlayersFromOneTeam = data.maxPlayersFromOneTeam;
   const cards = data.matches.map((match) => `<article class="card">
-      <div class="meta"><span>${escapeText(match.competition)}</span><span>${match.canBuildXi ? "XI open" : "XI closed"}</span></div>
+      <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}<span>${match.canBuildXi ? "XI open" : "XI locked"}</span></div>
       ${matchTile(match)}
       <div class="row">
         <button class="ghost" data-contests="${match.id}">Contests</button>
-        <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "Live" : "Closed"}</button>
+        <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "View live" : "Closed"}</button>
       </div>
     </article>`).join("");
   app.innerHTML = shell("Matches", `
@@ -353,12 +371,13 @@ async function renderDetail(id: string): Promise<void> {
   app.innerHTML = shell("Match", loading());
   const data = await api<{ match: MatchCard }>(`/matches/${id}`);
   const match = data.match;
-  app.innerHTML = shell(`${match.home.shortName} vs ${match.away.shortName}`, `
+  app.innerHTML = shell(escapeText(matchTitle(match)), `
+    <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}</div>
     ${matchTile(match)}
     <div class="row">
-      <a class="quiet" href="#/">← Matches</a>
+      <a class="back-link" href="#/">← Matches</a>
       <button class="ghost" id="to-contests">Contests</button>
-      <button class="primary" id="to-xi" ${match.canBuildXi ? "" : "disabled"}>Build XI</button>
+      <button class="primary" id="to-xi" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI locked"}</button>
     </div>
   `);
   document.querySelector("#to-contests")?.addEventListener("click", () => { location.hash = `#/matches/${id}/contests`; });
@@ -419,9 +438,15 @@ async function renderContests(matchId: string): Promise<void> {
       : `<div class="row" style="margin-top:24px">
           <button type="button" class="ghost" id="show-paid">Show Paid Devnet contests (dev only)</button>
         </div>`;
-  app.innerHTML = shell("Contests", `
-    <div class="row"><a class="quiet" href="#/matches/${matchId}">Match</a><a class="quiet" href="#/">Matches</a></div>
+  let matchName = "Match";
+  try {
+    const m = await api<{ match: MatchCard }>(`/matches/${matchId}`);
+    matchName = matchTitle(m.match);
+  } catch { /* ignore */ }
+  app.innerHTML = shell("Choose a contest", `
+    <div class="row"><a class="back-link" href="#/matches/${matchId}">← <strong>${escapeText(matchName)}</strong></a><a class="quiet" href="#/">All matches</a></div>
     <h2 style="margin-top:18px">FREE to play</h2>
+    <p class="quiet">No USDC · No monetary prize · Rank &amp; points only</p>
     ${free.map((c) => renderCard(c, false)).join("") || empty("No FREE contests yet.")}
     ${paidSection}
     <p class="note" id="join-note">${escapeText(state.joinNote)}</p>
@@ -560,12 +585,15 @@ async function renderMyContests(): Promise<void> {
   const data = await api<{ contests: ContestCard[] }>("/me/contests");
   // Mutually exclusive tabs from match/result lifecycle (API-enriched when present).
   const rows = data.contests.filter((contest) => resolveLifecycle(contest) === state.myBucket);
-  const cards = rows.map((contest) => `<article class="card">
-      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}<span class="quiet">${escapeText(resolveLifecycle(contest))}</span></div>
+  const cards = rows.map((contest) => {
+    const life = resolveLifecycle(contest);
+    return `<article class="card">
+      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}${statusChip(contest.matchStatus ?? life, life)}</div>
       <h2>${escapeText(contestTitle(contest))}</h2>
-      <p class="quiet">${escapeText(contest.status.replaceAll("_", " "))} · ${contest.filledCount}/${contest.capacity}${contest.matchStatus ? ` · match ${escapeText(contest.matchStatus.replaceAll("_", " "))}` : ""}</p>
+      <p class="quiet">${escapeText(contest.status.replaceAll("_", " "))} · ${contest.filledCount}/${contest.capacity} filled</p>
       ${myContestActions(contest)}
-    </article>`).join("");
+    </article>`;
+  }).join("");
   app.innerHTML = shell("My Contests", `
     <div class="tabs">
       ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-my="${bucket}" aria-pressed="${state.myBucket === bucket}">${bucket}</button>`).join("")}
@@ -598,7 +626,8 @@ async function renderLeaderboard(contestId: string): Promise<void> {
   app.innerHTML = shell("Leaderboard", loading());
   const contestResp = await api<{ contest: ContestCard }>(`/contests/${contestId}`);
   const card = contestResp.contest;
-  if (card.matchId && !card.matchStatus) {
+  let matchLabel = "";
+  if (card.matchId) {
     try {
       const matchResp = await api<{ match: MatchCard }>(`/matches/${card.matchId}`);
       card.matchStatus = matchResp.match.status;
@@ -607,44 +636,82 @@ async function renderLeaderboard(contestId: string): Promise<void> {
         hasFinalResult: card.hasFinalResult,
       });
       card.primaryCta = contestPrimaryCta(card.lifecycleBucket);
+      matchLabel = matchTitle(matchResp.match);
     } catch {
       /* keep defaults */
     }
   }
   let rowsHtml = empty("Leaderboard will appear once scoring starts.");
+  let updatedAt: string | null = null;
+  let freshness: string | null = null;
+  let staleNote = "";
   try {
     const free = await api<{ result: { rows: Array<{ entryId: string; wallet: string; finalScoreMilliPoints: number; rank: number }> } | null }>(
       `/contests/${contestId}/free-result`,
     );
     if (free.result?.rows?.length) {
-      rowsHtml = free.result.rows.map((row) => {
-        const you = row.wallet === state.walletAddress;
-        return `<div class="lb-row ${you ? "you" : ""}"><div class="rank">#${row.rank}</div><div>${you ? "<strong>You</strong>" : escapeText(shortWallet(row.wallet))}</div><div>${(row.finalScoreMilliPoints / 1000).toFixed(1)} pts</div></div>`;
-      }).join("");
+      freshness = "FINAL";
+      rowsHtml = free.result.rows.map((row) =>
+        lbRowHtml({
+          rank: row.rank,
+          label: shortWallet(row.wallet),
+          milliPoints: row.finalScoreMilliPoints,
+          you: row.wallet === state.walletAddress,
+        }),
+      ).join("");
     } else if (card.matchId) {
-      const board = await api<{ leaderboard: Array<{ entryId: string; contestId: string; wallet: string; milliPoints: number; rank: number }> }>(
-        `/matches/${card.matchId}/leaderboard`,
-      );
+      const board = await api<{
+        freshness?: string;
+        timestamps?: { updatedAt?: string };
+        leaderboard: Array<{
+          entryId: string;
+          contestId: string;
+          wallet: string;
+          milliPoints: number;
+          rank: number;
+          priorRank?: number | null;
+          scoreDelta?: number | null;
+        }>;
+      }>(`/matches/${card.matchId}/leaderboard`);
+      freshness = board.freshness ?? null;
+      updatedAt = board.timestamps?.updatedAt ?? null;
       const filtered = board.leaderboard.filter((row) => row.contestId === contestId);
       if (filtered.length) {
-        rowsHtml = filtered.map((row) => {
-          const you = row.wallet === state.walletAddress;
-          return `<div class="lb-row ${you ? "you" : ""}"><div class="rank">#${row.rank}</div><div>${you ? "<strong>You</strong>" : escapeText(shortWallet(row.wallet))}</div><div>${(row.milliPoints / 1000).toFixed(1)} pts</div></div>`;
-        }).join("");
+        rowsHtml = filtered.map((row) =>
+          lbRowHtml({
+            rank: row.rank,
+            label: shortWallet(row.wallet),
+            milliPoints: row.milliPoints,
+            you: row.wallet === state.walletAddress,
+            priorRank: row.priorRank,
+            scoreDelta: row.scoreDelta,
+          }),
+        ).join("");
+      } else {
+        rowsHtml = empty("No scored entries yet for this contest.");
+      }
+      if (freshness === "STALE") {
+        staleNote = `<div class="errors">Live data is delayed — scores may catch up shortly.</div>`;
       }
     }
   } catch {
     rowsHtml = empty("Could not load leaderboard.");
   }
   const bucket = resolveLifecycle(card);
+  const live = bucket === "live";
   const resultBtn = bucket === "completed"
     ? `<button class="primary" id="to-result">View result</button>`
     : `<button class="ghost" id="to-result">My result</button>`;
-  app.innerHTML = shell(bucket === "live" ? "Live leaderboard" : "Leaderboard", `
-    <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span><span class="quiet">${escapeText(bucket)}</span></div>
-    <div class="leaderboard" style="margin-top:16px">${rowsHtml}</div>
+  app.innerHTML = shell(live ? "Live leaderboard" : "Leaderboard", `
+    <div class="lb-head">
+      <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span>${live ? '<span class="badge badge-live">LIVE</span>' : statusChip(card.matchStatus ?? bucket, bucket)}</div>
+      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshness)}` : ""}</div>
+    </div>
+    ${matchLabel ? `<p class="quiet" style="margin:4px 0 12px">${escapeText(matchLabel)}</p>` : ""}
+    ${staleNote}
+    <div class="leaderboard">${rowsHtml}</div>
     <div class="row" style="margin-top:16px">
-      <a class="quiet" href="#/my-contests">← My Contests</a>
+      <a class="back-link" href="#/my-contests">← My Contests</a>
       ${resultBtn}
     </div>
   `);
@@ -704,7 +771,7 @@ async function renderResult(contestId: string): Promise<void> {
     const captain = result.xiSummary?.find((p) => p.isCaptain);
     const vice = result.xiSummary?.find((p) => p.isVice);
     const matchLabel = result.match
-      ? `${result.match.home.shortName} vs ${result.match.away.shortName}`
+      ? matchTitle(result.match)
       : "Match";
     const contestLabel = result.contestName ?? result.templateCode ?? result.contestType ?? "Contest";
 
@@ -724,20 +791,25 @@ async function renderResult(contestId: string): Promise<void> {
     const xiByPos = (pos: string) =>
       (result.xiSummary ?? [])
         .filter((p) => p.position === pos)
-        .map((p) => {
-          const role = p.isCaptain ? "C" : p.isVice ? "VC" : "";
-          return `<div class="chip">${escapeText(p.shortName)}${role ? `<span class="role badge ${role === "C" ? "badge-c" : "badge-vc"}">${role}</span>` : ""}</div>`;
-        })
+        .map((p) =>
+          playerChip({
+            displayName: p.displayName,
+            shortName: p.shortName,
+            role: p.isCaptain ? "C" : p.isVice ? "VC" : "",
+          }),
+        )
         .join("") || `<div class="chip quiet">${pos}</div>`;
 
     const boardHtml = (result.topLeaderboard ?? []).length
-      ? result.topLeaderboard.map((row) => {
-          const pts = (row.finalScoreMilliPoints / 1000).toFixed(1);
-          const you = row.isYou ? " you" : "";
-          const wallet = row.wallet.length > 10 ? `${row.wallet.slice(0, 4)}…${row.wallet.slice(-4)}` : row.wallet;
-          return `<div class="lb-row${you}"><span class="rank">#${row.rank}</span><span>${escapeText(wallet)}${row.isYou ? " · you" : ""}</span><strong>${pts}</strong></div>`;
-        }).join("")
-      : `<p class="quiet">Leaderboard pending finalization.</p>`;
+      ? result.topLeaderboard.map((row) =>
+          lbRowHtml({
+            rank: row.rank,
+            label: row.wallet.length > 10 ? `${row.wallet.slice(0, 4)}…${row.wallet.slice(-4)}` : row.wallet,
+            milliPoints: row.finalScoreMilliPoints,
+            you: row.isYou,
+          }),
+        ).join("")
+      : empty("Leaderboard pending finalization.");
 
     app.innerHTML = shell("Final result", `
       <article class="card result-hero">
@@ -749,7 +821,7 @@ async function renderResult(contestId: string): Promise<void> {
         <h2>${escapeText(matchLabel)}</h2>
         <p class="quiet">${result.match ? escapeText(result.match.competition) + " · " + escapeText(kickoffLabel(result.match.kickoffAt)) : ""}</p>
         <div class="result-stats">
-          <div><span class="quiet">Final rank</span><strong>#${result.rank ?? "—"}</strong><span class="quiet">of ${result.totalEntries}</span></div>
+          <div><span class="quiet">Final rank</span><strong class="rank-hero">#${result.rank ?? "—"}</strong><span class="quiet">of ${result.totalEntries}</span></div>
           <div><span class="quiet">Final score</span><strong>${score}</strong><span class="quiet">pts</span></div>
           <div><span class="quiet">Entrants</span><strong>${result.totalEntries}</strong></div>
         </div>
@@ -892,10 +964,14 @@ async function renderBuilder(matchId: string): Promise<void> {
     state.draft.playerIds
       .map((id) => byId.get(id))
       .filter((p): p is PoolPlayer => !!p && p.position === pos)
-      .map((p) => {
-        const role = p.playerId === state.draft.captainId ? "C" : p.playerId === state.draft.viceId ? "VC" : "";
-        return `<div class="chip">${escapeText(p.shortName)}${role ? `<span class="role badge ${role === "C" ? "badge-c" : "badge-vc"}">${role}</span>` : ""}</div>`;
-      })
+      .map((p) =>
+        playerChip({
+          displayName: p.displayName,
+          shortName: p.shortName,
+          role: p.playerId === state.draft.captainId ? "C" : p.playerId === state.draft.viceId ? "VC" : "",
+          selected: true,
+        }),
+      )
       .join("") || `<div class="chip quiet">${pos}</div>`;
 
   const filtered = players.filter((p) => {
@@ -904,42 +980,67 @@ async function renderBuilder(matchId: string): Promise<void> {
     return true;
   });
 
-  app.innerHTML = shell("Build your XI", `
-    <div class="row"><a class="quiet" href="#/matches/${matchId}">← Match</a><span class="quiet">${escapeText(formationLabel(state.draft.playerIds.map((id) => byId.get(id)?.position ?? "MID")))}</span></div>
+  const selectedCount = state.draft.playerIds.length;
+  const formation = formationLabel(state.draft.playerIds.map((id) => byId.get(id)?.position ?? "MID"));
+  const meterClass = left <= 0 ? "meter full" : left <= 10 ? "meter warn" : "meter";
+  const title = matchTitle(matchResp.match);
+  const lockBanner = readOnly
+    ? `<div class="lock-banner"><strong>Read-only</strong><span>Match is locked — you can review this XI but not change it.</span></div>`
+    : "";
+  const validationHtml = validation.valid
+    ? ""
+    : `<ul class="errors">${validation.errors.map((e) => `<li>${escapeText(e.message)}</li>`).join("")}</ul>`;
+
+  app.innerHTML = shell(readOnly ? "Your XI" : "Build your XI", `
+    <div class="row">
+      <a class="back-link" href="#/matches/${matchId}">← <strong>${escapeText(title)}</strong></a>
+      <span class="quiet">${escapeText(formation)} · ${selectedCount}/11 selected</span>
+    </div>
+    ${lockBanner}
     <article class="card">
-      <div class="meta"><span>Credits</span><span>${used} / ${creditCap} · ${left} left</span></div>
-      <div class="meter"><span style="width:${Math.min(100, (used / creditCap) * 100)}%"></span></div>
-      <div class="pitch" style="margin-top:14px">
+      <div class="credits-panel">
+        <div>
+          <div class="quiet">Credits remaining</div>
+          <div class="credits-left">${left}</div>
+        </div>
+        <div class="xi-count">${used} / ${creditCap} used</div>
+      </div>
+      <div class="${meterClass}"><span style="width:${Math.min(100, (used / creditCap) * 100)}%"></span></div>
+      <div class="pitch" style="margin-top:16px">
         <div class="line">${slot("FWD")}</div>
         <div class="line">${slot("MID")}</div>
         <div class="line">${slot("DEF")}</div>
         <div class="line">${slot("GK")}</div>
       </div>
-      ${validation.valid ? "" : `<div class="errors">${validation.errors.map((e) => escapeText(e.message)).join(" · ")}</div>`}
-      <div class="row" style="margin-top:12px">
+      ${validationHtml}
+      <div class="row" style="margin-top:14px">
         ${readOnly
-          ? `<span class="pill badge-paid">READ-ONLY · match locked</span>`
+          ? `<span class="pill badge-paid">LOCKED XI</span>`
           : `<button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>`}
-        <button class="ghost" id="to-contests">Choose contest</button>
+        <button class="ghost" id="to-contests">${readOnly ? "View contests" : "Choose contest"}</button>
       </div>
-      <p class="note" id="saved">${saved.latest && !readOnly ? `Loaded saved XI v${saved.latest.version} · ${saved.latest.creditsUsed} credits` : readOnly && saved.latest ? `Locked XI v${saved.latest.version}` : ""}</p>
+      <p class="note" id="saved">${saved.latest && !readOnly ? `Loaded saved XI v${saved.latest.version} · ${saved.latest.creditsUsed} credits` : readOnly && saved.latest ? `Locked XI v${saved.latest.version}` : "Pick 11 players, then set Captain (C) and Vice (VC)."}</p>
     </article>
+    ${readOnly ? "" : `
     <div class="filters">
       ${(["ALL", "GK", "DEF", "MID", "FWD"] as const).map((f) => `<button type="button" data-filter="${f}" aria-pressed="${state.draft.filter === f}">${f}</button>`).join("")}
     </div>
-    <input class="search" id="q" placeholder="Search players" value="${escapeText(state.draft.query)}" />
+    <input class="search" id="q" placeholder="Search players by name" value="${escapeText(state.draft.query)}" ${readOnly ? "disabled" : ""} />
     <div class="stack">
       ${filtered.map((p) => {
         const selected = state.draft.playerIds.includes(p.playerId);
-        return `<div class="player">
+        const isC = state.draft.captainId === p.playerId;
+        const isVc = state.draft.viceId === p.playerId;
+        return `<div class="player${selected ? " selected" : ""}">
+          <div class="avatar">${escapeText(initials(p.displayName))}</div>
           <div><strong>${escapeText(p.displayName)}</strong><div class="quiet">${escapeText(p.position)} · ${escapeText(p.clubName)} · ${p.credit} cr</div></div>
-          <div class="row">
-            <button class="ghost" data-toggle="${p.playerId}">${selected ? "Remove" : "Add"}</button>
-            ${selected ? `<button class="ghost" data-cap="${p.playerId}">C</button><button class="ghost" data-vice="${p.playerId}">VC</button>` : ""}
+          <div class="actions">
+            <button class="ghost" data-toggle="${p.playerId}" ${readOnly ? "disabled" : ""}>${selected ? "Remove" : "Add"}</button>
+            ${selected ? `<button class="ghost" data-cap="${p.playerId}" aria-pressed="${isC}" title="Set captain">C</button><button class="ghost" data-vice="${p.playerId}" aria-pressed="${isVc}" title="Set vice-captain">VC</button>` : ""}
           </div>
         </div>`;
-      }).join("")}
-    </div>
+      }).join("") || empty("No players match this filter.")}
+    </div>`}
   `);
 
   document.querySelector("#q")?.addEventListener("input", (event) => {
