@@ -275,6 +275,7 @@ const state: {
   loading: boolean;
   error: string | null;
   environment: string | null;
+  demoData: boolean;
 } = {
   token: sessionStorage.getItem("kickr.session.token") ?? sessionStorage.getItem("kickr.dev.token"),
   authMode: (sessionStorage.getItem("kickr.auth.mode") as "dev" | "wallet" | null) ?? (sessionStorage.getItem("kickr.dev.token") ? "dev" : null),
@@ -295,6 +296,7 @@ const state: {
   loading: false,
   error: null,
   environment: null,
+  demoData: false,
 };
 
 let devDepositKey: Keypair | null = null;
@@ -357,12 +359,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 async function runtimeEnvironment(): Promise<string> {
   if (state.environment) return state.environment;
   try {
-    const body = await (await fetch("/v1/config/public")).json() as { environment?: string };
+    const body = await (await fetch("/v1/config/public")).json() as {
+      environment?: string;
+      demoData?: boolean;
+    };
     state.environment = body.environment ?? "development";
+    state.demoData = body.demoData === true;
   } catch {
     state.environment = "development";
+    state.demoData = false;
   }
   return state.environment;
+}
+
+function demoBannerHtml(): string {
+  if (!state.demoData) return "";
+  return `<div class="demo-banner" role="status"><strong>DEMO DATA</strong><span>Free fantasy football demo using fictional match data.</span></div>`;
 }
 
 function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
@@ -407,7 +419,9 @@ function shell(title: string, body: string): string {
   const auth = state.token
     ? state.authMode === "wallet" && state.walletAddress
       ? `Wallet · ${shortWallet(state.walletAddress)}`
-      : "Dev signer"
+      : state.walletAddress
+        ? `Signed in · ${shortWallet(state.walletAddress)}`
+        : "Signed in"
     : "";
   return `<div class="shell">
     <div class="top">
@@ -420,10 +434,11 @@ function shell(title: string, body: string): string {
       </div>
       <div class="quiet auth-label" data-auth-label>${escapeText(auth)}</div>
     </div>
+    ${demoBannerHtml()}
     <h1>${title}</h1>
     ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
     ${body}
-    <p class="note">FREE contests &amp; private leagues need no USDC. Credits are a squad budget, not money. Paid Devnet contests stay available only in development.</p>
+    <p class="note">FREE contests &amp; private leagues need no USDC. Credits are a squad budget, not money.${state.environment === "production" || state.demoData ? "" : " Paid Devnet contests stay available only in development."}</p>
   </div>`;
 }
 
@@ -437,6 +452,7 @@ function empty(label: string): string {
 
 async function render(): Promise<void> {
   state.error = null;
+  await runtimeEnvironment();
   const hash = route();
   try {
     if (!state.token) {
@@ -564,7 +580,7 @@ async function renderList(): Promise<void> {
     <div class="tabs">
       ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-bucket="${bucket}" aria-pressed="${state.bucket === bucket}">${bucket}</button>`).join("")}
     </div>
-    ${cards || empty("No matches in this view. Try LOCAL_DEV / DEMO Cup fixtures.")}
+    ${cards || empty("No matches in this view yet.")}
   `);
   bindOnboardingDismiss();
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-bucket]")) {

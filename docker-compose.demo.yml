@@ -1,0 +1,45 @@
+# Production-demo stack (SPORTS_PROVIDER=DEMO).
+# Requires a .env.demo file (never commit secrets). See DEMO.md.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: kickr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kickr}
+      POSTGRES_DB: kickr
+    volumes:
+      - kickr_demo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kickr -d kickr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env.demo
+    environment:
+      NODE_ENV: production
+      SPORTS_PROVIDER: DEMO
+      PORT: 3000
+      DATABASE_URL: postgres://kickr:${POSTGRES_PASSWORD:-kickr}@postgres:5432/kickr
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  kickr_demo_pg:

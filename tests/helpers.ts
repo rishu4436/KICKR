@@ -97,6 +97,7 @@ export function testConfig(overrides?: {
         requestTimeoutMs: 8000,
         liveProviderConfigured: false,
         demoSeedEnabled: false,
+        demoControlToken: "",
       },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },
       contests: {

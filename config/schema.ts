@@ -102,6 +102,12 @@ export const envSchema = z.object({
     },
     z.boolean(),
   ),
+  // Token-gated DEMO match control (advance / scoring waves). Empty = disabled.
+  // Never grantable under Sportmonks. Prefer >=16 chars. Never log the value.
+  DEMO_CONTROL_TOKEN: z.preprocess(
+    (value) => (value === undefined || value === "" ? "" : value),
+    z.string(),
+  ),
   // TODO: 100 is a development default, not a confirmed production credit cap.
   FANTASY_CREDIT_CAP: intOrDefault(100),
   // Blank means the numeric per-club max is unset. Do not invent one.

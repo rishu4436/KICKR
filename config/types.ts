@@ -76,6 +76,8 @@ export interface ServerConfig {
     requestTimeoutMs: number;
     liveProviderConfigured: boolean;
     demoSeedEnabled: boolean;
+    /** Raw DEMO_CONTROL_TOKEN; empty disables control. Never expose publicly. */
+    demoControlToken: string;
   };
   fantasy: {
     creditCap: number;

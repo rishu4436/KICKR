@@ -88,6 +88,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
         requestTimeoutMs: data.SPORTS_REQUEST_TIMEOUT_MS,
         liveProviderConfigured,
         demoSeedEnabled: data.DEMO_SEED_ENABLED,
+        demoControlToken: data.DEMO_CONTROL_TOKEN,
       },
       fantasy: {
         creditCap: data.FANTASY_CREDIT_CAP,

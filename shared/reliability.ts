@@ -16,6 +16,9 @@ export const RELIABILITY_COUNTERS = [
   "claim_reconcile_delays",
   "dependency_timeouts",
   "settlement_failures",
+  "demo_control_actions",
+  "scoring_rebuilds",
+  "failed_api_requests",
 ] as const;
 
 export type ReliabilityCounter = (typeof RELIABILITY_COUNTERS)[number];

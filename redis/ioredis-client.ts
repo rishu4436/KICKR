@@ -31,6 +31,10 @@ export function createIoredisClient(url: string): ClosableRedis {
       await redis.del(key);
     },
     async ping(): Promise<boolean> {
+      // lazyConnect: only connect from wait; already connecting/ready is fine.
+      if (redis.status === "wait") {
+        await redis.connect();
+      }
       const reply = await redis.ping();
       return reply === "PONG";
     },

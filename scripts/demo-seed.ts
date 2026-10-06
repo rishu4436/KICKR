@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   } finally {
     await pool.end().catch(() => undefined);
-    redis.disconnect();
+    await redis.close().catch(() => undefined);
   }
 }
 

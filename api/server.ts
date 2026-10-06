@@ -23,6 +23,7 @@ import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
 import { registerDevE2eRoutes } from "./dev-e2e.js";
+import { registerDemoControlRoutes } from "./demo-control.js";
 import { registerLeagueRoutes } from "./leagues.js";
 import { registerProfileRoutes } from "./profile.js";
 import { registerSharePages } from "./share-pages.js";
@@ -158,14 +159,26 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
         deps.counters?.hit("settlement_failures");
       }
     }
+    deps.counters?.hit("failed_api_requests");
     if (!(normalized instanceof AppError) || normalized.status >= 500) {
       deps.logger.error(
         redact({
           requestId: correlationId,
           name: normalized instanceof Error ? normalized.name : "Error",
           message: normalized instanceof Error ? normalized.message : "unknown",
+          status: normalized instanceof AppError ? normalized.status : 500,
         }) as Record<string, unknown>,
         "request failed",
+      );
+    } else {
+      deps.logger.warn(
+        redact({
+          requestId: correlationId,
+          code: normalized.code,
+          status: normalized.status,
+          path: c.req.path,
+        }) as Record<string, unknown>,
+        "request error",
       );
     }
     return c.json(mapped.body, mapped.status as 400);
@@ -185,11 +198,18 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.get("/health", (c) => {
+    const demoControlConfigured =
+      deps.config.public.sportsProvider === "demo" &&
+      (deps.config.server.sportsData.demoControlToken ?? "").trim().length >= 16;
     return c.json({
       ok: true,
       check: "live",
       service: "kickr-api",
       LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
+      sportsProvider: deps.config.public.sportsProvider,
+      demoData: deps.config.public.demoData,
+      demoControlConfigured,
+      counters: deps.counters?.snapshot() ?? null,
     });
   });
 
@@ -342,6 +362,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   );
   registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
   registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
+  registerDemoControlRoutes(app, deps);
   registerLeagueRoutes(app, deps, (c) => authenticate(deps, c));
   registerProfileRoutes(app, deps, (c) => authenticate(deps, c));
   registerSharePages(app, deps);

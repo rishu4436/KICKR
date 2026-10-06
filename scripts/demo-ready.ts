@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   } catch {
     redisOk = false;
   } finally {
-    redis.disconnect();
+    await redis.close().catch(() => undefined);
   }
 
   // Public demo readiness always treats paid production as disabled.
