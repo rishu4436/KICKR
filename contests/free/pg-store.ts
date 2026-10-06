@@ -1,11 +1,21 @@
 import type pg from "pg";
+import { asIsoTimestamp, asJsonArray, asString } from "../../db/mappers.js";
 import type { FreeContestResult, FreeResultRow, FreeResultStore } from "./results.js";
 
 type Row = Record<string, unknown>;
 
-function asString(value: unknown): string {
-  if (typeof value !== "string") throw new Error("expected string");
-  return value;
+function mapFreeResult(row: Row): FreeContestResult {
+  return {
+    id: asString(row.id),
+    contestId: asString(row.contest_id),
+    matchId: asString(row.match_id),
+    status: "FINAL",
+    rows: asJsonArray<FreeResultRow>(row.rows),
+    finalizedAt: asIsoTimestamp(row.finalized_at),
+    merkleRoot: null,
+    settlementHash: null,
+    claimable: false,
+  };
 }
 
 export function createPgFreeResultStore(pool: pg.Pool): FreeResultStore {
@@ -20,17 +30,7 @@ export function createPgFreeResultStore(pool: pg.Pool): FreeResultStore {
         );
         const row = result.rows[0] as Row | undefined;
         if (!row) return null;
-        return {
-          id: asString(row.id),
-          contestId: asString(row.contest_id),
-          matchId: asString(row.match_id),
-          status: "FINAL",
-          rows: row.rows as FreeResultRow[],
-          finalizedAt: new Date(asString(row.finalized_at)).toISOString(),
-          merkleRoot: null,
-          settlementHash: null,
-          claimable: false,
-        };
+        return mapFreeResult(row);
       } finally {
         client.release();
       }
@@ -56,18 +56,7 @@ export function createPgFreeResultStore(pool: pg.Pool): FreeResultStore {
            FROM free_contest_results WHERE contest_id = $1`,
           [result.contestId],
         );
-        const row = existing.rows[0] as Row;
-        return {
-          id: asString(row.id),
-          contestId: asString(row.contest_id),
-          matchId: asString(row.match_id),
-          status: "FINAL",
-          rows: row.rows as FreeResultRow[],
-          finalizedAt: new Date(asString(row.finalized_at)).toISOString(),
-          merkleRoot: null,
-          settlementHash: null,
-          claimable: false,
-        };
+        return mapFreeResult(existing.rows[0] as Row);
       } finally {
         client.release();
       }

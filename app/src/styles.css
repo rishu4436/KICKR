@@ -168,10 +168,20 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -0.03em; }
 .note { font-size: 12px; color: var(--muted); margin-top: 16px; }
 .errors { color: var(--danger); font-size: 14px; }
 
+.dev-only-panel {
+  border: 1px dashed rgba(255,255,255,0.18);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: rgba(255,255,255,0.02);
+}
+
 @media (max-width: 560px) {
   .shell { padding: 12px 12px 48px; }
   .match-tile { grid-template-columns: 1fr; }
   .team-side.away { flex-direction: row; text-align: left; }
   .kickoff { justify-self: start; }
   .crest { width: 40px; height: 40px; }
+  /* Dev signer crowds the header on small screens — hide it. */
+  .auth-label { display: none; }
+  .top { gap: 8px; }
 }

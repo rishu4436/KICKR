@@ -78,96 +78,88 @@ const playersA = buildPlayers(1, LOCAL_DEV_CLUB_A, "A");
 const playersB = buildPlayers(2, LOCAL_DEV_CLUB_B, "B");
 const excluded = playersA.find((player) => player.position === "FWD" && player.shortName.endsWith("4"))?.id ?? null;
 
-function sampleEvents(matchId: string): ProviderEvent[] {
-  const goal = playersA.find((player) => player.position === "FWD" && player.shortName.endsWith("1"));
-  const assist = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("1"));
-  const shot = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("2"));
-  const yellow = playersB.find((player) => player.position === "DEF" && player.shortName.endsWith("1"));
-  const corner = playersB.find((player) => player.position === "MID" && player.shortName.endsWith("1"));
-  const off = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("3"));
-  const on = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("4"));
-  if (!goal || !assist || !shot || !yellow || !corner || !off || !on) {
+/**
+ * Local-dev-only scoring timeline. Distinct player hits so captain / XI variants
+ * produce visibly different fantasy totals. Never labelled as Sportmonks.
+ */
+function sampleEvents(matchId: string, wave: "live" | "final"): ProviderEvent[] {
+  const aFwd1 = playersA.find((player) => player.position === "FWD" && player.shortName.endsWith("1"));
+  const aFwd2 = playersA.find((player) => player.position === "FWD" && player.shortName.endsWith("2"));
+  const aMid1 = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("1"));
+  const aMid2 = playersA.find((player) => player.position === "MID" && player.shortName.endsWith("2"));
+  const aDef1 = playersA.find((player) => player.position === "DEF" && player.shortName.endsWith("1"));
+  const bFwd2 = playersB.find((player) => player.position === "FWD" && player.shortName.endsWith("2"));
+  const bMid1 = playersB.find((player) => player.position === "MID" && player.shortName.endsWith("1"));
+  const bMid2 = playersB.find((player) => player.position === "MID" && player.shortName.endsWith("2"));
+  const bDef1 = playersB.find((player) => player.position === "DEF" && player.shortName.endsWith("1"));
+  const bDef2 = playersB.find((player) => player.position === "DEF" && player.shortName.endsWith("2"));
+  if (!aFwd1 || !aFwd2 || !aMid1 || !aMid2 || !aDef1 || !bFwd2 || !bMid1 || !bMid2 || !bDef1 || !bDef2) {
     throw new Error("local dev catalog is missing sample players");
   }
+  const prefix = wave === "live" ? "7" : "6";
   const base = {
     matchId,
     provider: "local-dev",
-    matchMinute: 20,
     period: "1",
-    metadata: { label: "development event, not a live feed" },
+    metadata: {
+      label: "development event, not a live feed",
+      source: "local-dev",
+      wave,
+      notSportmonks: true,
+    },
     supersedesEventId: null,
     createdAt: "2026-10-01T16:00:00.000Z",
   };
-  return [
-    {
+  const mk = (
+    seq: number,
+    minute: number,
+    eventType: ProviderEvent["eventType"],
+    primary: ProviderPlayer,
+    teamId: string,
+    secondary: ProviderPlayer | null = null,
+  ): ProviderEvent => {
+    const day = wave === "live" ? "3" : "1";
+    const hours = 15 + Math.floor(minute / 60);
+    const mins = minute % 60;
+    return {
       ...base,
-      eventId: "60000000-0000-4000-8000-000000000001",
-      providerEventId: "dev-evt-1",
-      sequence: 1,
-      timestamp: "2026-10-01T15:20:00.000Z",
-      eventType: "GOAL",
-      primaryPlayerId: goal.id,
-      secondaryPlayerId: null,
-      teamId: LOCAL_DEV_CLUB_A,
-    },
-    {
-      ...base,
-      eventId: "60000000-0000-4000-8000-000000000002",
-      providerEventId: "dev-evt-2",
-      sequence: 2,
-      timestamp: "2026-10-01T15:20:00.000Z",
-      eventType: "ASSIST",
-      primaryPlayerId: assist.id,
-      secondaryPlayerId: null,
-      teamId: LOCAL_DEV_CLUB_A,
-    },
-    {
-      ...base,
-      eventId: "60000000-0000-4000-8000-000000000003",
-      providerEventId: "dev-evt-3",
-      sequence: 3,
-      timestamp: "2026-10-01T15:25:00.000Z",
-      eventType: "SHOT_ON_TARGET",
-      primaryPlayerId: shot.id,
-      secondaryPlayerId: null,
-      teamId: LOCAL_DEV_CLUB_A,
-    },
-    {
-      ...base,
-      eventId: "60000000-0000-4000-8000-000000000004",
-      providerEventId: "dev-evt-4",
-      sequence: 4,
-      timestamp: "2026-10-01T15:40:00.000Z",
-      eventType: "YELLOW_CARD",
-      primaryPlayerId: yellow.id,
-      secondaryPlayerId: null,
-      teamId: LOCAL_DEV_CLUB_B,
-    },
-    {
-      ...base,
-      eventId: "60000000-0000-4000-8000-000000000005",
-      providerEventId: "dev-evt-5",
-      sequence: 5,
-      timestamp: "2026-10-01T15:55:00.000Z",
-      eventType: "CORNER_WON",
-      primaryPlayerId: corner.id,
-      secondaryPlayerId: null,
-      teamId: LOCAL_DEV_CLUB_B,
-    },
-    {
-      ...base,
-      eventId: "60000000-0000-4000-8000-000000000006",
-      providerEventId: "dev-evt-6",
-      sequence: 6,
-      timestamp: "2026-10-01T16:05:00.000Z",
-      matchMinute: 60,
-      period: "2",
-      eventType: "SUBSTITUTION",
-      primaryPlayerId: off.id,
-      secondaryPlayerId: on.id,
-      teamId: LOCAL_DEV_CLUB_A,
-    },
+      eventId: `${prefix}0000000-0000-4000-8000-${String(seq).padStart(12, "0")}`,
+      providerEventId: `dev-${wave}-evt-${seq}`,
+      sequence: seq,
+      timestamp: `2026-10-0${day}T${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:00.000Z`,
+      matchMinute: minute,
+      period: minute >= 45 ? "2" : "1",
+      eventType,
+      primaryPlayerId: primary.id,
+      secondaryPlayerId: secondary?.id ?? null,
+      teamId,
+    };
+  };
+
+  // Wave order matters for "events arriving over time" demos.
+  const early: ProviderEvent[] = [
+    mk(1, 8, "SHOT_ON_TARGET", aMid1, LOCAL_DEV_CLUB_A),
+    mk(2, 12, "CORNER_WON", bMid1, LOCAL_DEV_CLUB_B),
+    mk(3, 18, "GOAL", aFwd2, LOCAL_DEV_CLUB_A),
+    mk(4, 18, "ASSIST", aMid2, LOCAL_DEV_CLUB_A),
   ];
+  const mid: ProviderEvent[] = [
+    mk(5, 33, "YELLOW_CARD", bDef1, LOCAL_DEV_CLUB_B),
+    mk(6, 41, "SHOT_ON_TARGET", bFwd2, LOCAL_DEV_CLUB_B),
+    mk(7, 44, "GOAL", bFwd2, LOCAL_DEV_CLUB_B),
+    mk(8, 44, "ASSIST", bMid2, LOCAL_DEV_CLUB_B),
+  ];
+  const late: ProviderEvent[] = [
+    mk(9, 55, "CORNER_WON", aDef1, LOCAL_DEV_CLUB_A),
+    mk(10, 62, "SHOT_ON_TARGET", aMid2, LOCAL_DEV_CLUB_A),
+    mk(11, 71, "GOAL", aFwd2, LOCAL_DEV_CLUB_A),
+    mk(12, 78, "YELLOW_CARD", bDef2, LOCAL_DEV_CLUB_B),
+  ];
+  if (wave === "live") {
+    // Live match: early + mid only so late events can be appended by seed tooling.
+    return [...early, ...mid];
+  }
+  return [...early, ...mid, ...late];
 }
 
 export function buildLocalDevCatalog(): SportsCatalog {
@@ -222,7 +214,10 @@ export function buildLocalDevCatalog(): SportsCatalog {
       ...squadFor(LOCAL_DEV_MATCH_LIVE, players, excluded),
       ...squadFor(LOCAL_DEV_MATCH_FINAL, players, excluded),
     ],
-    events: sampleEvents(LOCAL_DEV_MATCH_FINAL),
+    events: [
+      ...sampleEvents(LOCAL_DEV_MATCH_LIVE, "live"),
+      ...sampleEvents(LOCAL_DEV_MATCH_FINAL, "final"),
+    ],
   };
 }
 

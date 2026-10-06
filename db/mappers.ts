@@ -28,3 +28,31 @@ export function asNullableDate(value: unknown): Date | null {
   }
   return asDate(value);
 }
+
+/** pg returns timestamptz as Date; memory/tests may pass ISO strings. */
+export function asIsoTimestamp(value: unknown): string {
+  return asDate(value).toISOString();
+}
+
+export function asJsonArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) {
+    return value as T[];
+  }
+  if (typeof value === "string") {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed as T[];
+    }
+  }
+  throw new Error("Expected a JSON array");
+}
+
+export function asNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  throw new Error("Expected a number");
+}

@@ -24,7 +24,9 @@ The migration runner expects the process working directory to be the repository 
 | --- | --- |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Vitest. No live Postgres or Redis. |
+| `npm test` | Vitest unit suite. No live Postgres or Redis. Excludes `tests/pg`. |
+| `npm run test:pg` | Postgres integration suite (`tests/pg`). Uses `KICKR_TEST_DATABASE_URL` or `DATABASE_URL` rewritten to `/kickr_test`. Loud-fails if unset or pointed at primary `kickr`. |
+| `npm run dev:seed-free-ux` | Dev-only FREE UX seed against a running API. Blocked when `NODE_ENV=production`. |
 | `cd escrow && anchor test --skip-deploy` | LiteSVM program tests. Not run by GitHub Actions. |
 | `npm run build` | Compile to `dist/` |
 | `npm run dev` | API via tsx |
@@ -49,3 +51,18 @@ Do not add escrow instructions, USDC transfers, scoring, sports ingestion, settl
 ## Phase 2 UI
 
 `npm run build` compiles the API and the Vite client into `dist/client`. `npm start` or `npm run dev` serves `/` from that folder when it exists. Set `SPORTS_DATA_PROVIDER=local-dev` and run migrations through `002` to load the fictional catalog. Sign-in on the page uses a development keypair, not a production wallet.
+
+
+## Postgres integration tests
+
+Phase 11.1 bugs in free-result Date mapping and FREE-GRAND multi-join were Postgres-only and invisible to the in-memory suite. `npm run test:pg` migrates a dedicated database (default name `kickr_test`), truncates app tables between cases, and exercises real `pg` stores — never the in-memory contest store.
+
+```bash
+# once
+createdb kickr_test   # or: CREATE DATABASE kickr_test;
+export KICKR_TEST_DATABASE_URL='postgres://kickr:kickr@127.0.0.1:5432/kickr_test'
+npm run test:pg
+```
+
+If `KICKR_TEST_DATABASE_URL` / `DATABASE_URL` is missing, the suite prints a loud failure and exits. It refuses to run against the primary `/kickr` database so local-dev data stays intact.
+

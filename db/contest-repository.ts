@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { transition } from "../domain/state-machine.js";
+import { nextContestFillStatus, transition } from "../domain/state-machine.js";
 import type { ContestState } from "../domain/state-machine.js";
 import { DEV_SCORING_SNAPSHOT } from "../contests/dev-catalog.js";
 import type { ContestStore, EnsureResult, ReserveResult, ReserveSeatInput } from "../contests/store.js";
@@ -412,8 +412,7 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         if ((dupTeam.rowCount ?? 0) > 0) {
           throw new AppError("DUPLICATE_RESERVATION", 409, "Team version already has a reservation in this contest");
         }
-        const nextStatus = (contest.filledCount + 1 === contest.capacity ? "FULL" : "PARTIALLY_FILLED") as ContestState;
-        const status = transition("CONTEST", contest.status, nextStatus) as ContestState;
+        const status = nextContestFillStatus(contest.status, contest.filledCount + 1, contest.capacity);
         const updated = await tx.query(
           `UPDATE contests
            SET filled_count = filled_count + 1, status = $2, updated_at = $3
@@ -872,8 +871,7 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         if ((dupWallet.rowCount ?? 0) > 0) {
           throw new AppError("DUPLICATE_ENTRY", 409, "Wallet already has a seat in this contest");
         }
-        const nextStatus = (contest.filledCount + 1 === contest.capacity ? "FULL" : "PARTIALLY_FILLED") as ContestState;
-        const status = transition("CONTEST", contest.status, nextStatus) as ContestState;
+        const status = nextContestFillStatus(contest.status, contest.filledCount + 1, contest.capacity);
         const nowIso = input.now.toISOString();
         const updated = await tx.query(
           `UPDATE contests

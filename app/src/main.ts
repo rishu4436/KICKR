@@ -14,7 +14,13 @@ import {
 } from "./claim-flow.js";
 import { contestAcceptsNewEntry } from "../../contests/types.js";
 import { calculateCreditsUsed, remainingCredits } from "../../domain/football/credits.js";
-import { formationLabel } from "../../domain/football/presentation.js";
+import {
+  classifyContestLifecycle,
+  contestPrimaryCta,
+  formationLabel,
+  type ContestLifecycleBucket,
+  type ContestPrimaryCta,
+} from "../../domain/football/presentation.js";
 import { validateFantasyTeam } from "../../domain/football/validate-team.js";
 
 Object.assign(globalThis, { Buffer });
@@ -60,6 +66,10 @@ interface ContestCard {
   entryId?: string;
   teamVersionId?: string;
   joinedAt?: string;
+  matchStatus?: string | null;
+  lifecycleBucket?: ContestLifecycleBucket;
+  primaryCta?: ContestPrimaryCta;
+  hasFinalResult?: boolean;
 }
 
 interface Draft {
@@ -80,6 +90,7 @@ const state: {
   walletAddress: string | null;
   bucket: "upcoming" | "live" | "completed";
   myBucket: "upcoming" | "live" | "completed";
+  showPaidDevnet: boolean;
   creditCap: number;
   maxPlayersFromOneTeam: number | null;
   draft: Draft;
@@ -99,6 +110,7 @@ const state: {
   walletAddress: sessionStorage.getItem("kickr.auth.wallet"),
   bucket: "upcoming",
   myBucket: "upcoming",
+  showPaidDevnet: false,
   creditCap: 100,
   maxPlayersFromOneTeam: null,
   draft: { playerIds: [], captainId: "", viceId: "", filter: "ALL", query: "" },
@@ -220,7 +232,7 @@ function shell(title: string, body: string): string {
         <a href="#/" ${hash === "#/" || hash.startsWith("#/matches") ? 'aria-current="page"' : ""}>Matches</a>
         <a href="#/my-contests" ${hash.startsWith("#/my-contests") ? 'aria-current="page"' : ""}>My Contests</a>
       </div>
-      <div class="quiet">${escapeText(auth)}</div>
+      <div class="quiet auth-label" data-auth-label>${escapeText(auth)}</div>
     </div>
     <h1>${title}</h1>
     ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
@@ -390,19 +402,38 @@ async function renderContests(matchId: string): Promise<void> {
           ? `<button class="primary" data-join="${contest.contestId}" data-kind="${contest.contestKind}">${contest.contestKind === "FREE" ? "Join FREE" : "Join (paid)"}</button>`
           : `<p class="quiet">${disabledPaid && contest.contestKind !== "FREE" ? "Paid contests disabled" : "Closed to new entries"}</p>`}
         <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
-        <button class="ghost" data-result="${contest.contestId}">My result</button>
       </div>
     </article>`;
   };
   const paidDisabled = env === "production";
+  const showPaid = !paidDisabled && state.showPaidDevnet && paid.length > 0;
+  const paidSection = paidDisabled || paid.length === 0
+    ? ""
+    : showPaid
+      ? `<section class="dev-only-panel" style="margin-top:24px">
+          <div class="meta"><h2 style="margin:0">Paid Devnet (development only)</h2>
+            <button type="button" class="ghost" id="hide-paid">Hide</button></div>
+          <p class="quiet">Not part of the FREE journey. Requires USDC on Devnet. Disabled in production.</p>
+          ${paid.map((c) => renderCard(c, false)).join("")}
+        </section>`
+      : `<div class="row" style="margin-top:24px">
+          <button type="button" class="ghost" id="show-paid">Show Paid Devnet contests (dev only)</button>
+        </div>`;
   app.innerHTML = shell("Contests", `
     <div class="row"><a class="quiet" href="#/matches/${matchId}">Match</a><a class="quiet" href="#/">Matches</a></div>
     <h2 style="margin-top:18px">FREE to play</h2>
     ${free.map((c) => renderCard(c, false)).join("") || empty("No FREE contests yet.")}
-    <h2 style="margin-top:24px">Paid Devnet ${paidDisabled ? "(disabled)" : "(dev only)"}</h2>
-    ${paid.map((c) => renderCard(c, paidDisabled)).join("") || empty("No paid contests.")}
+    ${paidSection}
     <p class="note" id="join-note">${escapeText(state.joinNote)}</p>
   `);
+  document.querySelector("#show-paid")?.addEventListener("click", () => {
+    state.showPaidDevnet = true;
+    void renderContests(matchId);
+  });
+  document.querySelector("#hide-paid")?.addEventListener("click", () => {
+    state.showPaidDevnet = false;
+    void renderContests(matchId);
+  });
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-join]")) {
     button.addEventListener("click", () => {
       void joinContest(matchId, button.dataset.join ?? "", (button.dataset.kind as ContestCard["contestKind"]) ?? "FREE");
@@ -495,37 +526,51 @@ async function signDeposit(matchId: string): Promise<void> {
   await renderContests(matchId);
 }
 
+function resolveLifecycle(contest: ContestCard): ContestLifecycleBucket {
+  if (contest.lifecycleBucket) return contest.lifecycleBucket;
+  return classifyContestLifecycle({
+    matchStatus: contest.matchStatus,
+    hasFinalResult: contest.hasFinalResult,
+  });
+}
+
+function myContestActions(contest: ContestCard): string {
+  const bucket = resolveLifecycle(contest);
+  const cta = contest.primaryCta ?? contestPrimaryCta(bucket);
+  if (cta === "view_result") {
+    return `<div class="row">
+        <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
+        <button class="primary" data-result="${contest.contestId}">View result</button>
+      </div>`;
+  }
+  if (cta === "live_leaderboard") {
+    return `<div class="row">
+        <button class="primary" data-board="${contest.contestId}">Live leaderboard</button>
+        <button class="ghost" data-view="${contest.contestId}">View contest</button>
+      </div>`;
+  }
+  return `<div class="row">
+        <button class="primary" data-view="${contest.contestId}">View contest</button>
+        <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
+      </div>`;
+}
+
 async function renderMyContests(): Promise<void> {
   app.innerHTML = shell("My Contests", loading());
   const data = await api<{ contests: ContestCard[] }>("/me/contests");
-  const now = Date.now();
-  const bucketed = data.contests.filter((contest) => {
-    const lock = Date.parse(contest.lockTime);
-    const status = contest.status;
-    if (state.myBucket === "completed") return ["SETTLED", "REFUNDED", "VOID", "LOCKED"].includes(status) && lock < now - 3 * 3600_000;
-    if (state.myBucket === "live") return ["LOCKED", "IN_PROGRESS", "IN_REVIEW", "READY_FOR_SETTLEMENT", "FULL"].includes(status) || (lock <= now && !["SETTLED", "REFUNDED", "VOID"].includes(status));
-    return contestAcceptsNewEntry(status) || (lock > now && !["SETTLED", "REFUNDED", "VOID"].includes(status));
-  });
-  // Fallback: if bucket filter empties, show all for the selected tab semantics loosely
-  const rows = (bucketed.length ? bucketed : data.contests.filter((c) => {
-    if (state.myBucket === "completed") return ["SETTLED", "REFUNDED", "VOID"].includes(c.status);
-    if (state.myBucket === "live") return ["LOCKED", "IN_PROGRESS", "IN_REVIEW", "READY_FOR_SETTLEMENT"].includes(c.status);
-    return contestAcceptsNewEntry(c.status) || c.status === "FULL";
-  }));
+  // Mutually exclusive tabs from match/result lifecycle (API-enriched when present).
+  const rows = data.contests.filter((contest) => resolveLifecycle(contest) === state.myBucket);
   const cards = rows.map((contest) => `<article class="card">
-      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}</div>
+      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}<span class="quiet">${escapeText(resolveLifecycle(contest))}</span></div>
       <h2>${escapeText(contestTitle(contest))}</h2>
-      <p class="quiet">${escapeText(contest.status.replaceAll("_", " "))} · ${contest.filledCount}/${contest.capacity}</p>
-      <div class="row">
-        <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
-        <button class="primary" data-result="${contest.contestId}">View result</button>
-      </div>
+      <p class="quiet">${escapeText(contest.status.replaceAll("_", " "))} · ${contest.filledCount}/${contest.capacity}${contest.matchStatus ? ` · match ${escapeText(contest.matchStatus.replaceAll("_", " "))}` : ""}</p>
+      ${myContestActions(contest)}
     </article>`).join("");
   app.innerHTML = shell("My Contests", `
     <div class="tabs">
       ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-my="${bucket}" aria-pressed="${state.myBucket === bucket}">${bucket}</button>`).join("")}
     </div>
-    ${cards || empty("No contests yet. Join a FREE contest from a match.")}
+    ${cards || empty(`No ${state.myBucket} contests. Join a FREE contest from a match.`)}
   `);
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-my]")) {
     button.addEventListener("click", () => {
@@ -539,12 +584,33 @@ async function renderMyContests(): Promise<void> {
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-result]")) {
     button.addEventListener("click", () => { location.hash = `#/contests/${button.dataset.result}/result`; });
   }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-view]")) {
+    button.addEventListener("click", () => {
+      const id = button.dataset.view ?? "";
+      const row = data.contests.find((c) => c.contestId === id);
+      if (row?.matchId) location.hash = `#/matches/${row.matchId}/contests`;
+      else location.hash = `#/contests/${id}/leaderboard`;
+    });
+  }
 }
 
 async function renderLeaderboard(contestId: string): Promise<void> {
   app.innerHTML = shell("Leaderboard", loading());
   const contestResp = await api<{ contest: ContestCard }>(`/contests/${contestId}`);
   const card = contestResp.contest;
+  if (card.matchId && !card.matchStatus) {
+    try {
+      const matchResp = await api<{ match: MatchCard }>(`/matches/${card.matchId}`);
+      card.matchStatus = matchResp.match.status;
+      card.lifecycleBucket = classifyContestLifecycle({
+        matchStatus: matchResp.match.status,
+        hasFinalResult: card.hasFinalResult,
+      });
+      card.primaryCta = contestPrimaryCta(card.lifecycleBucket);
+    } catch {
+      /* keep defaults */
+    }
+  }
   let rowsHtml = empty("Leaderboard will appear once scoring starts.");
   try {
     const free = await api<{ result: { rows: Array<{ entryId: string; wallet: string; finalScoreMilliPoints: number; rank: number }> } | null }>(
@@ -570,12 +636,16 @@ async function renderLeaderboard(contestId: string): Promise<void> {
   } catch {
     rowsHtml = empty("Could not load leaderboard.");
   }
-  app.innerHTML = shell("Live leaderboard", `
-    <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span></div>
+  const bucket = resolveLifecycle(card);
+  const resultBtn = bucket === "completed"
+    ? `<button class="primary" id="to-result">View result</button>`
+    : `<button class="ghost" id="to-result">My result</button>`;
+  app.innerHTML = shell(bucket === "live" ? "Live leaderboard" : "Leaderboard", `
+    <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span><span class="quiet">${escapeText(bucket)}</span></div>
     <div class="leaderboard" style="margin-top:16px">${rowsHtml}</div>
     <div class="row" style="margin-top:16px">
       <a class="quiet" href="#/my-contests">← My Contests</a>
-      <button class="primary" id="to-result">My result</button>
+      ${resultBtn}
     </div>
   `);
   document.querySelector("#to-result")?.addEventListener("click", () => {

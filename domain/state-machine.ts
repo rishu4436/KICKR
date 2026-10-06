@@ -168,6 +168,30 @@ const TRANSITIONS: Record<EntityName, ReadonlyArray<readonly [string, string]>> 
 
 const ENTITY_SET: ReadonlySet<string> = new Set(ENTITIES);
 
+
+/**
+ * Seat-fill status after a successful join/reserve.
+ * OPEN → PARTIALLY_FILLED on the first seat; stay PARTIALLY_FILLED on later seats;
+ * move to FULL only when capacity is reached. Never calls transition() for a no-op
+ * PARTIALLY_FILLED → PARTIALLY_FILLED self-edge (illegal in CONTEST_TRANSITIONS).
+ */
+export function nextContestFillStatus(
+  current: ContestState,
+  filledAfterJoin: number,
+  capacity: number,
+): ContestState {
+  if (filledAfterJoin >= capacity) {
+    return transition("CONTEST", current, "FULL") as ContestState;
+  }
+  if (current === "OPEN") {
+    return transition("CONTEST", current, "PARTIALLY_FILLED") as ContestState;
+  }
+  if (current === "PARTIALLY_FILLED") {
+    return current;
+  }
+  throw new IllegalTransitionError("CONTEST", current, filledAfterJoin >= capacity ? "FULL" : "PARTIALLY_FILLED");
+}
+
 export function isKnownEntity(entity: string): entity is EntityName {
   return ENTITY_SET.has(entity);
 }

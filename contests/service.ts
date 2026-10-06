@@ -4,7 +4,8 @@ import type { FootballService } from "../football/service.js";
 import { AppError } from "../shared/errors.js";
 import type { ContestDiscoveryCache } from "./discovery.js";
 import type { ContestStore } from "./store.js";
-import type { ContestLimits, ContestRecord, DiscoveryView, EntryRecord, ReservationRecord } from "./types.js";
+import type { ContestLimits, ContestRecord, DiscoveryView, EntryRecord, MyContestView, ReservationRecord } from "./types.js";
+import { classifyContestLifecycle, contestPrimaryCta } from "../domain/football/presentation.js";
 import { assertBaseUnits } from "./types.js";
 import { buildDepositPlan, type DepositPlan, type EscrowClientConfig } from "../solana/escrow.js";
 import { assertDevCluster, DEFAULT_ESCROW_PROGRAM_ID } from "../solana/ids.js";
@@ -496,17 +497,31 @@ export class ContestService {
     };
   }
 
-  async listMyContests(wallet: string): Promise<Array<DiscoveryView & { entryId: string; teamVersionId: string; joinedAt: string }>> {
+  async listMyContests(wallet: string): Promise<MyContestView[]> {
     const entries = await this.store.listConfirmedEntriesForWallet(wallet);
-    const out: Array<DiscoveryView & { entryId: string; teamVersionId: string; joinedAt: string }> = [];
+    const out: MyContestView[] = [];
     for (const entry of entries) {
       const contest = await this.store.getContest(entry.contestId);
       if (!contest) continue;
+      const match = await this.football.getMatch(contest.matchId);
+      const freeResult =
+        contest.contestKind === "FREE" && this.freeResults
+          ? await this.freeResults.getByContest(contest.id)
+          : null;
+      const hasFinalResult = freeResult != null;
+      const lifecycleBucket = classifyContestLifecycle({
+        matchStatus: match?.status ?? null,
+        hasFinalResult,
+      });
       out.push({
         ...discoveryOf(contest),
         entryId: entry.id,
         teamVersionId: entry.teamVersionId,
         joinedAt: entry.joinedAt,
+        matchStatus: match?.status ?? null,
+        lifecycleBucket,
+        primaryCta: contestPrimaryCta(lifecycleBucket),
+        hasFinalResult,
       });
     }
     return out;

@@ -201,6 +201,17 @@ export interface DiscoveryView {
   estimateLabel: "filled entries times entry fee; not funded money";
 }
 
+/** /me/contests enrichment: match/result lifecycle, not contest seat status. */
+export interface MyContestView extends DiscoveryView {
+  entryId: string;
+  teamVersionId: string;
+  joinedAt: string;
+  matchStatus: string | null;
+  lifecycleBucket: "upcoming" | "live" | "completed";
+  primaryCta: "view_contest" | "live_leaderboard" | "view_result";
+  hasFinalResult: boolean;
+}
+
 export function assertBaseUnits(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative safe integer base-unit amount`);
