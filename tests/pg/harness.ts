@@ -24,7 +24,7 @@ import { FootballService } from "../../football/service.js";
 import { InMemoryRedis } from "../../redis/client.js";
 import { createLocalDevProvider } from "../../sports/local-dev-provider.js";
 import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../../sports/id-map.js";
-import { createContestScoringSource } from "../../live/contest-scoring-source.js";
+import { createCombinedScoringSource } from "../../live/combined-scoring-source.js";
 import { LiveScoringService } from "../../live/service.js";
 import { LocalDevScoringActorRegistry } from "../../contests/free/local-dev-scoring-actor.js";
 import { LeagueService, createPgLeagueStore } from "../../leagues/index.js";
@@ -155,8 +155,6 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
     true,
     freeResults,
   );
-  const leagues = new LeagueService(leagueStore, football, audit);
-  const profiles = new ProfileService(accountRepo, audit, freeResults, contestStore, leagueStore);
   const scoringActors = new LocalDevScoringActorRegistry(
     { nodeEnv: config.server.nodeEnv, sportsDataProvider: config.public.sportsDataProvider },
     audit,
@@ -171,8 +169,10 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
     config.public.environment,
     audit,
     "local-dev",
-    createContestScoringSource(contestStore),
+    createCombinedScoringSource(contestStore, leagueStore),
   );
+  const leagues = new LeagueService(leagueStore, football, audit, live);
+  const profiles = new ProfileService(accountRepo, audit, freeResults, contestStore, leagueStore);
   const deps: AppDeps = {
     config,
     auth,

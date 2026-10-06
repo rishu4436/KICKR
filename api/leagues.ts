@@ -110,7 +110,11 @@ export function registerLeagueRoutes(
   app.get("/leagues/:id/leaderboard", async (c) => {
     if (!deps.leagues) throw new AppError("NOT_FOUND", 404, "Not found");
     const principal = await authenticate(c);
-    const board = await deps.leagues.leaderboard(c.req.param("id"), principal.walletAddress);
+    const board = await deps.leagues.leaderboard(
+      c.req.param("id"),
+      principal.walletAddress,
+      context(deps, c),
+    );
     return c.json(board);
   });
 
@@ -125,10 +129,23 @@ export function registerLeagueRoutes(
   app.get("/leagues/:id/share", async (c) => {
     if (!deps.leagues) throw new AppError("NOT_FOUND", 404, "Not found");
     const principal = await authenticate(c);
-    const league = await deps.leagues.get(c.req.param("id"), principal.walletAddress);
-    const result = await deps.leagues.getResult(c.req.param("id"));
-    const myRow = result?.rows.find((r) => r.wallet === principal.walletAddress) ?? null;
-    // Owner-scoped: non-members only get public label without private ranks of others.
+    const leagueId = c.req.param("id");
+    const league = await deps.leagues.get(leagueId, principal.walletAddress);
+    const result = await deps.leagues.getResult(leagueId);
+    let myRow = result?.rows.find((r) => r.wallet === principal.walletAddress) ?? null;
+    if (!myRow) {
+      const board = await deps.leagues.leaderboard(leagueId, principal.walletAddress, context(deps, c));
+      const liveRow = board.rows.find((r) => r.you) ?? null;
+      if (liveRow) {
+        myRow = {
+          memberId: "",
+          wallet: liveRow.wallet,
+          teamVersionId: liveRow.teamVersionId,
+          finalScoreMilliPoints: liveRow.milliPoints,
+          rank: liveRow.rank,
+        };
+      }
+    }
     if (!league.youJoined && !league.isOwner) {
       throw new AppError("FORBIDDEN", 403, "Join the league to share your result");
     }
@@ -136,14 +153,28 @@ export function registerLeagueRoutes(
     const matchLabel = match
       ? `${match.home.name} vs ${match.away.name}`
       : league.matchId;
+    let captain: string | null = null;
+    if (myRow?.teamVersionId) {
+      try {
+        const version = await deps.football.getVersionForAccount(myRow.teamVersionId, principal.accountId);
+        if (version) {
+          const pool = await deps.football.getPlayerPool(league.matchId);
+          const cap = pool?.find((p) => p.playerId === version.version.captainId);
+          captain = cap?.displayName ?? null;
+        }
+      } catch {
+        captain = null;
+      }
+    }
     const card = buildShareCard({
       kind: "PRIVATE_LEAGUE",
       label: league.name,
       matchLabel,
       rank: myRow?.rank ?? null,
       scoreMilliPoints: myRow?.finalScoreMilliPoints ?? null,
-      captain: null,
-      path: `#/leagues/${league.id}`,
+      captain,
+      path: `#/share/league/${league.id}`,
+      sharePath: `/share/league/${league.id}`,
     });
     return c.json({ share: card });
   });

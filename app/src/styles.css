@@ -601,3 +601,13 @@ form.card input, form.card select {
   border-radius: 12px;
   padding: 10px 12px;
 }
+
+/* Phase 14: league polish + share */
+.league-invite-form { margin-top: 0; }
+.league-actions { flex-wrap: wrap; gap: 8px; }
+.share-card .row { flex-wrap: wrap; gap: 8px; }
+@media (max-width: 560px) {
+  .league-actions { flex-direction: column; align-items: stretch; }
+  .league-actions button { width: 100%; }
+  form.card label { font-size: 12px; }
+}

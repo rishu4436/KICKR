@@ -12,7 +12,7 @@ import { createPgFreeResultStore } from "../contests/free/pg-store.js";
 import { resolveSportsRuntime } from "../sports/factory.js";
 import { InMemoryProviderIdMap, loadProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
 import { createPgProviderIdMapRepository } from "../db/provider-id-map.js";
-import { createContestScoringSource } from "../live/contest-scoring-source.js";
+import { createCombinedScoringSource } from "../live/combined-scoring-source.js";
 import { LiveScoringService } from "../live/service.js";
 import { createIngestWorker } from "../live/ingest.js";
 import path from "node:path";
@@ -114,7 +114,7 @@ const live = new LiveScoringService(
   sportsRuntime.liveConfigured
     ? (sportsRuntime.liveProviderName ?? "sportmonks")
     : sports?.name ?? "none",
-  createContestScoringSource(contestStore),
+  createCombinedScoringSource(contestStore, leagueStore),
 );
 live.metrics.setProvider(
   sportsRuntime.liveProviderName,
@@ -167,7 +167,7 @@ const attestationGate = createSettlementAttestationGate({
 });
 const settlement = new SettlementService(createPgSettlementStore(db), attestationGate);
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
-const leagues = new LeagueService(leagueStore, football, auditStore);
+const leagues = new LeagueService(leagueStore, football, auditStore, live);
 const profiles = new ProfileService(
   createPgAccountRepository(db),
   auditStore,

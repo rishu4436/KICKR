@@ -143,9 +143,11 @@ export function shareCardHtml(share: {
   note: string;
   text: string;
   url: string;
+  sharePath?: string;
 }): string {
   const scoreLabel = share.score != null ? share.score.toFixed(1) : "—";
   const rankLabel = share.rank != null ? `#${share.rank}` : "—";
+  const link = share.sharePath ?? share.url;
   return `<article class="card share-card" data-share-text="${escapeText(share.text)}">
     <p class="quiet">Shareable FREE result</p>
     <h3>KICKR</h3>
@@ -154,7 +156,8 @@ export function shareCardHtml(share: {
     <p class="note">${escapeText(share.note)}</p>
     <div class="row">
       <button type="button" class="ghost" data-copy-share>Copy text</button>
-      <span class="quiet mono">${escapeText(share.url)}</span>
+      <a class="ghost" href="${escapeText(share.url)}">Open share page</a>
+      <span class="quiet mono">${escapeText(link)}</span>
     </div>
   </article>`;
 }

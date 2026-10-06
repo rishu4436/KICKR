@@ -82,7 +82,8 @@ export function registerProfileRoutes(
       rank: myRow?.rank ?? null,
       scoreMilliPoints: myRow?.finalScoreMilliPoints ?? null,
       captain,
-      path: `#/contests/${contestId}/result`,
+      path: `#/share/contest/${contestId}`,
+      sharePath: `/share/contest/${contestId}`,
     });
     return c.json({ share: card });
   });

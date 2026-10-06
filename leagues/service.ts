@@ -2,6 +2,7 @@ import type { AuditStore } from "../audit/types.js";
 import type { RequestContext } from "../auth/types.js";
 import { classifyContestLifecycle } from "../domain/football/presentation.js";
 import type { FootballService } from "../football/service.js";
+import type { LiveScoringService } from "../live/service.js";
 import { AppError } from "../shared/errors.js";
 import { newId } from "../shared/ids.js";
 import { generateInviteCode, invitePath, normalizeInviteCode } from "./invite.js";
@@ -38,6 +39,8 @@ export class LeagueService {
     private readonly store: LeagueStore,
     private readonly football: FootballService,
     private readonly audit: AuditStore,
+    /** Optional live pipeline — when present, league boards reuse FREE contest scoring. */
+    private readonly live: LiveScoringService | null = null,
   ) {}
 
   private async toView(
@@ -238,10 +241,11 @@ export class LeagueService {
   async leaderboard(
     leagueId: string,
     viewerWallet: string | null,
-    liveScores?: Map<string, number>,
+    ctx?: RequestContext,
   ): Promise<{
     league: PrivateLeagueView;
-    freshness: "LIVE" | "FINAL" | "UNKNOWN";
+    freshness: "LIVE" | "STALE" | "UNKNOWN" | "FINAL" | "DATA_ERROR";
+    scoreSnapshotId: string | null;
     rows: PrivateLeagueLeaderboardRow[];
   }> {
     const league = await this.store.getById(leagueId);
@@ -252,6 +256,7 @@ export class LeagueService {
       return {
         league: view,
         freshness: "FINAL",
+        scoreSnapshotId: null,
         rows: final.rows.map((row) => ({
           rank: row.rank,
           wallet: row.wallet,
@@ -261,24 +266,76 @@ export class LeagueService {
         })),
       };
     }
+
     const members = await this.store.listMembers(leagueId);
+    const requestCtx: RequestContext = ctx ?? { now: new Date(), correlationId: null };
+
+    if (this.live && members.length > 0) {
+      const liveBoard = await this.live.getLeagueLeaderboard(
+        {
+          leagueId,
+          matchId: league.matchId,
+          memberEntryIds: members.map((m) => m.id),
+        },
+        requestCtx,
+      );
+      if (liveBoard) {
+        // FINAL locks the league result from the same pipeline scores (idempotent).
+        if (liveBoard.freshness === "FINAL") {
+          const scores = members.map((m) => {
+            const row = liveBoard.leaderboard.find((r) => r.entryId === m.id);
+            return {
+              memberId: m.id,
+              wallet: m.wallet,
+              teamVersionId: m.teamVersionId,
+              finalScoreMilliPoints: row?.milliPoints ?? 0,
+            };
+          });
+          const locked = await this.finalize(leagueId, scores, requestCtx);
+          return {
+            league: await this.toView(league, viewerWallet),
+            freshness: "FINAL",
+            scoreSnapshotId: liveBoard.scoreSnapshotId,
+            rows: locked.rows.map((row) => ({
+              rank: row.rank,
+              wallet: row.wallet,
+              teamVersionId: row.teamVersionId,
+              milliPoints: row.finalScoreMilliPoints,
+              you: viewerWallet != null && row.wallet === viewerWallet,
+            })),
+          };
+        }
+        return {
+          league: view,
+          freshness: liveBoard.freshness,
+          scoreSnapshotId: liveBoard.scoreSnapshotId,
+          rows: liveBoard.leaderboard.map((row) => ({
+            rank: row.rank,
+            wallet: row.wallet,
+            teamVersionId: row.teamVersionId,
+            milliPoints: row.milliPoints,
+            you: viewerWallet != null && row.wallet === viewerWallet,
+          })),
+        };
+      }
+    }
+
+    // No live pipeline / empty membership — explicit UNKNOWN, not a fake LIVE board.
     const scored = members.map((m) => ({
       rank: 0,
       wallet: m.wallet,
       teamVersionId: m.teamVersionId,
-      milliPoints: liveScores?.get(m.teamVersionId) ?? 0,
+      milliPoints: 0,
       you: viewerWallet != null && m.wallet === viewerWallet,
     }));
-    scored.sort((a, b) => {
-      if (b.milliPoints !== a.milliPoints) return b.milliPoints - a.milliPoints;
-      return a.wallet.localeCompare(b.wallet);
-    });
+    scored.sort((a, b) => a.wallet.localeCompare(b.wallet));
     scored.forEach((row, i) => {
       row.rank = i + 1;
     });
     return {
       league: view,
-      freshness: liveScores ? "LIVE" : "UNKNOWN",
+      freshness: "UNKNOWN",
+      scoreSnapshotId: null,
       rows: scored,
     };
   }

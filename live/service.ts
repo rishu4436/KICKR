@@ -231,6 +231,96 @@ export class LiveScoringService {
     };
   }
 
+  /**
+   * Private league leaderboard reuses the match pipeline scores.
+   * Postgres event log + league membership entry ids are the scoreSnapshotId.
+   * Stale Redis league cache is discarded when the snapshot diverges.
+   * Ranks are within the league only (not mixed with other contests).
+   */
+  async getLeagueLeaderboard(
+    input: {
+      leagueId: string;
+      matchId: string;
+      memberEntryIds: readonly string[];
+    },
+    ctx: RequestContext,
+  ) {
+    const match = await this.football.getMatch(input.matchId);
+    if (!match) {
+      return null;
+    }
+    const events = await this.store.listEvents(input.matchId);
+    const fingerprint = eventLogFingerprint(events);
+    const entryIds = [...input.memberEntryIds].sort();
+    const expectedSnapshotId = computeScoreSnapshotId({
+      eventCount: fingerprint.eventCount,
+      lastEventAt: fingerprint.lastEventAt,
+      lastEventId: fingerprint.lastEventId,
+      entryIds,
+    });
+
+    let leagueBoard = await this.cache.readLeagueLeaderboard(input.leagueId);
+    if (!leagueBoard || !isScoreSnapshotFresh(leagueBoard.scoreSnapshotId, expectedSnapshotId)) {
+      // Discard stale league cache; rebuild from the shared pipeline.
+      await this.cache.clearLeagueLeaderboard(input.leagueId);
+      const matchBoard = await this.getLeaderboard(input.matchId, ctx);
+      if (!matchBoard) {
+        return null;
+      }
+      const memberSet = new Set(entryIds);
+      const filtered = matchBoard.leaderboard
+        .filter((row) => row.contestId === input.leagueId && memberSet.has(row.entryId))
+        .sort((a, b) => b.milliPoints - a.milliPoints || a.entryId.localeCompare(b.entryId))
+        .map((row, index) => ({
+          ...row,
+          rank: index + 1,
+        }));
+      leagueBoard = {
+        matchId: input.matchId,
+        contestId: input.leagueId,
+        rows: filtered.map((row) => ({
+          entryId: row.entryId,
+          contestId: row.contestId,
+          teamVersionId: row.teamVersionId,
+          wallet: row.wallet,
+          milliPoints: row.milliPoints,
+          rank: row.rank,
+          priorRank: row.priorRank,
+          scoreDelta: row.scoreDelta,
+          teamId: row.entryId,
+          accountId: row.wallet,
+        })),
+        updatedAt: ctx.now.toISOString(),
+        freshness: matchBoard.freshness,
+        scoreSnapshotId: expectedSnapshotId,
+        eventCount: fingerprint.eventCount,
+        lastEventAt: fingerprint.lastEventAt,
+      };
+      await this.cache.writeLeagueLeaderboard(input.leagueId, leagueBoard);
+    }
+
+    return {
+      leagueId: input.leagueId,
+      matchId: input.matchId,
+      freshness: leagueBoard.freshness,
+      timestamps: { updatedAt: leagueBoard.updatedAt, lastEventAt: leagueBoard.lastEventAt },
+      scale: DEV_V1_SCALE,
+      scoreSnapshotId: leagueBoard.scoreSnapshotId,
+      eventCount: leagueBoard.eventCount,
+      leaderboard: leagueBoard.rows.map((row) => ({
+        entryId: row.entryId ?? row.teamId ?? "",
+        contestId: row.contestId || input.leagueId,
+        teamVersionId: row.teamVersionId ?? "",
+        wallet: row.wallet || row.accountId || "",
+        milliPoints: row.milliPoints,
+        rank: row.rank,
+        priorRank: row.priorRank ?? null,
+        scoreDelta: row.scoreDelta ?? null,
+      })),
+      note: "League ranks reuse FREE contest scoring (same event log, rules, snapshot identity). Redis is cache-only.",
+    };
+  }
+
   async getTeamLiveScore(teamId: string, accountId: string, ctx: RequestContext) {
     const owned = await this.football.getTeamForAccount(teamId, accountId);
     if (!owned) {

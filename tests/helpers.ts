@@ -21,6 +21,9 @@ import { InMemorySettlementStore } from "../settlement/memory-store.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import { InMemorySnapshotStore } from "../live/snapshot.js";
+import { LiveScoringService } from "../live/service.js";
+import { createCombinedScoringSource } from "../live/combined-scoring-source.js";
+import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
 import { InMemoryAttestationStore } from "../attestation/memory-store.js";
 import { createAttestorRegistry } from "../attestation/registry.js";
 import { createAttestorVerifier } from "../attestation/verify.js";
@@ -158,7 +161,19 @@ export function buildTestApp(clock: Clock): {
     true,
     freeResults,
   );
-  const leagues = new LeagueService(leagueStore, football, audit);
+  const idMap = new InMemoryProviderIdMap();
+  seedProviderIdMapFromCatalog(idMap, "local-dev", createLocalDevProvider().catalog());
+  const live = new LiveScoringService(
+    footballStore,
+    football,
+    idMap,
+    redis,
+    config.public.environment,
+    audit,
+    "local-dev",
+    createCombinedScoringSource(contestStore, leagueStore),
+  );
+  const leagues = new LeagueService(leagueStore, football, audit, live);
   const profiles = new ProfileService(accounts, audit, freeResults, contestStore, leagueStore);
   const snapshots = new InMemorySnapshotStore();
   const attestations = new InMemoryAttestationStore();
@@ -188,6 +203,7 @@ export function buildTestApp(clock: Clock): {
     leagues,
     profiles,
     scoringActors,
+    live,
     settlement,
     settlementOrchestrator,
     snapshots,

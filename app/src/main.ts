@@ -37,6 +37,7 @@ import {
 Object.assign(globalThis, { Buffer });
 
 const ONBOARD_KEY = "kickr.onboarding.seen";
+/** Dismissal preference only — never used as completion source of truth. */
 function onboardingSeen(): boolean {
   return sessionStorage.getItem(ONBOARD_KEY) === "1";
 }
@@ -48,6 +49,105 @@ function bindOnboardingDismiss(): void {
     dismissOnboarding();
     void render();
   });
+}
+
+const LEAGUE_RETURN_KEY = "kickr.league.return";
+interface LeagueReturnContext {
+  inviteCode: string;
+  matchId: string;
+  leagueId?: string;
+}
+function readLeagueReturn(): LeagueReturnContext | null {
+  try {
+    const raw = sessionStorage.getItem(LEAGUE_RETURN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LeagueReturnContext;
+    if (!parsed?.inviteCode || !parsed?.matchId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function writeLeagueReturn(ctx: LeagueReturnContext): void {
+  sessionStorage.setItem(LEAGUE_RETURN_KEY, JSON.stringify(ctx));
+}
+function clearLeagueReturn(): void {
+  sessionStorage.removeItem(LEAGUE_RETURN_KEY);
+}
+
+/** Onboarding completion from real account state (not sessionStorage checklist marks). */
+async function loadOnboardingProgress(): Promise<{
+  signedIn: boolean;
+  matchSelected: boolean;
+  xiSaved: boolean;
+  captainSet: boolean;
+  viceSet: boolean;
+  freeJoined: boolean;
+  leaderboardReady: boolean;
+}> {
+  const signedIn = Boolean(state.token);
+  const empty = {
+    signedIn,
+    matchSelected: false,
+    xiSaved: false,
+    captainSet: false,
+    viceSet: false,
+    freeJoined: false,
+    leaderboardReady: false,
+  };
+  if (!signedIn) return empty;
+  try {
+    const [upcoming, live, mine, leagues] = await Promise.all([
+      api<{ matches: MatchCard[] }>("/matches?bucket=upcoming"),
+      api<{ matches: MatchCard[] }>("/matches?bucket=live"),
+      api<{ contests: ContestCard[] }>("/me/contests"),
+      api<{ leagues: LeagueCard[] }>("/leagues/mine"),
+    ]);
+    const candidates = [...upcoming.matches, ...live.matches].slice(0, 6);
+    let matchSelected = false;
+    let xiSaved = false;
+    let captainSet = false;
+    let viceSet = false;
+    for (const match of candidates) {
+      try {
+        const mineTeam = await api<{
+          team: { id: string } | null;
+          latest: { playerIds: string[]; captainId: string; viceId: string; validationResult?: { valid: boolean } } | null;
+        }>(`/matches/${match.id}/my-team`);
+        if (mineTeam.team) matchSelected = true;
+        if (mineTeam.latest?.playerIds?.length === 11) {
+          xiSaved = true;
+          captainSet = Boolean(mineTeam.latest.captainId);
+          viceSet = Boolean(mineTeam.latest.viceId);
+          break;
+        }
+      } catch {
+        /* ignore per-match */
+      }
+    }
+    // Also honour in-session saved XI when API round-trip is sparse.
+    if (state.teamVersionId && state.teamMatchId) {
+      matchSelected = true;
+      xiSaved = true;
+      captainSet = true;
+      viceSet = true;
+    }
+    const freeJoined =
+      mine.contests.some((c) => c.contestKind === "FREE") ||
+      leagues.leagues.some((l) => l.youJoined || l.isOwner);
+    const leaderboardReady =
+      mine.contests.some(
+        (c) =>
+          c.contestKind === "FREE" &&
+          (c.hasFinalResult || c.lifecycleBucket === "live" || c.lifecycleBucket === "completed"),
+      ) ||
+      leagues.leagues.some(
+        (l) => (l.youJoined || l.isOwner) && (l.lifecycleBucket === "live" || l.lifecycleBucket === "completed"),
+      );
+    return { signedIn, matchSelected, xiSaved, captainSet, viceSet, freeJoined, leaderboardReady };
+  } catch {
+    return empty;
+  }
 }
 
 
@@ -325,8 +425,16 @@ async function render(): Promise<void> {
       await renderLeagueCreate();
       return;
     }
+    if (hash.startsWith("#/share/contest/")) {
+      await renderShareContest(hash.split("/")[3] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/share/league/")) {
+      await renderShareLeague(hash.split("/")[3] ?? "");
+      return;
+    }
     if (hash.startsWith("#/leagues/join/")) {
-      await renderLeagueJoin(hash.split("/")[3] ?? "");
+      await renderLeagueJoin(decodeURIComponent(hash.split("/")[3] ?? ""));
       return;
     }
     if (hash.startsWith("#/leagues/") && hash.endsWith("/leaderboard")) {
@@ -397,12 +505,13 @@ async function renderList(): Promise<void> {
         <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "View live" : "Closed"}</button>
       </div>
     </article>`).join("");
+  const progress = await loadOnboardingProgress();
   const onboard = onboardingChecklistHtml(onboardingSeen(), [
-    { done: Boolean(state.token), label: "Connect / sign in", href: "#/" },
-    { done: false, label: "Choose a match", href: "#/" },
-    { done: Boolean(state.teamVersionId), label: "Build XI + captain/vice", href: "#/" },
-    { done: false, label: "Join a FREE contest", href: "#/my-contests" },
-    { done: false, label: "Follow the leaderboard", href: "#/my-contests" },
+    { done: progress.signedIn, label: "Connect / sign in", href: "#/" },
+    { done: progress.matchSelected, label: "Choose a match", href: "#/" },
+    { done: progress.xiSaved && progress.captainSet && progress.viceSet, label: "Build XI + captain/vice", href: "#/" },
+    { done: progress.freeJoined, label: "Join a FREE contest or league", href: "#/leagues" },
+    { done: progress.leaderboardReady, label: "Follow the leaderboard", href: "#/my-contests" },
   ]);
   app.innerHTML = shell("Matches", `
     ${onboard}
@@ -917,26 +1026,7 @@ async function renderResult(contestId: string): Promise<void> {
       if (target) void startClaim(contestId, result.entryId, target);
     });
     document.querySelector("#load-share")?.addEventListener("click", () => {
-      void (async () => {
-        const slot = document.querySelector("#share-slot");
-        if (!slot) return;
-        try {
-          const payload = await api<{ share: {
-            matchLabel: string; label: string; rank: number | null; score: number | null;
-            captain: string | null; note: string; text: string; url: string;
-          } }>(`/contests/${contestId}/share`);
-          slot.innerHTML = shareCardHtml(payload.share);
-          document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
-            try {
-              await navigator.clipboard.writeText(payload.share.text);
-            } catch {
-              /* ignore */
-            }
-          });
-        } catch (error) {
-          slot.innerHTML = `<p class="error">${escapeText(error instanceof Error ? error.message : "Share failed")}</p>`;
-        }
-      })();
+      location.hash = `#/share/contest/${contestId}`;
     });
   } catch (error) {
     app.innerHTML = shell("Your result", empty(error instanceof Error ? error.message : "No confirmed entry yet."));
@@ -1195,6 +1285,13 @@ async function saveXi(matchId: string, existingTeamId: string | null = null): Pr
   state.teamMatchId = matchId;
   sessionStorage.setItem("kickr.dev.teamVersion", saved.version.id);
   sessionStorage.setItem("kickr.dev.teamMatch", matchId);
+  const pending = readLeagueReturn();
+  if (pending && pending.matchId === matchId) {
+    const note = document.querySelector("#saved");
+    if (note) note.textContent = `Saved XI v${saved.version.version}. Returning to league join…`;
+    location.hash = `#/leagues/join/${encodeURIComponent(pending.inviteCode)}`;
+    return;
+  }
   const note = document.querySelector("#saved");
   if (note) note.textContent = `Saved version ${saved.version.version}. Continue to contests to join FREE.`;
 }
@@ -1222,30 +1319,56 @@ async function renderLeaguesHome(): Promise<void> {
   const cards = data.leagues.map((league) => `<article class="card">
     <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span><span>${escapeText(league.lifecycleBucket)}</span></div>
     <h3>${escapeText(league.name)}</h3>
-    <p class="quiet">${league.memberCount} / ${league.capacity} members · invite ${escapeText(league.inviteCode)}</p>
+    <p class="quiet">${league.memberCount} / ${league.capacity} members · invite <span class="mono">${escapeText(league.inviteCode)}</span></p>
     <div class="row">
       <button class="primary" data-league="${league.id}">Open</button>
       <button class="ghost" data-board="${league.id}">Leaderboard</button>
+      <button class="ghost" data-copy-invite="${escapeText(league.inviteCode)}">Copy invite</button>
     </div>
   </article>`).join("");
   app.innerHTML = shell("Private FREE leagues", `
     <p class="quiet">Invite-only FREE leagues. No USDC, no prize, no settlement.</p>
-    <div class="row" style="margin-bottom:14px">
+    <div class="row league-actions" style="margin-bottom:14px">
       <button class="primary" id="create-league">Create league</button>
       <button class="ghost" id="join-league">Join with invite</button>
     </div>
+    <form id="invite-form" class="card league-invite-form" style="margin-bottom:14px">
+      <label>Invite code
+        <input name="code" maxlength="16" autocomplete="off" placeholder="e.g. AB12CD" required />
+      </label>
+      <div class="row"><button class="primary" type="submit">Preview invite</button></div>
+      <p class="quiet" id="invite-form-note"></p>
+    </form>
     ${cards || empty("No leagues yet. Create one or join with an invite code.")}
   `);
   document.querySelector("#create-league")?.addEventListener("click", () => { location.hash = "#/leagues/create"; });
   document.querySelector("#join-league")?.addEventListener("click", () => {
-    const code = prompt("Invite code");
-    if (code) location.hash = `#/leagues/join/${encodeURIComponent(code.trim())}`;
+    document.querySelector<HTMLInputElement>("#invite-form input[name=code]")?.focus();
+  });
+  document.querySelector("#invite-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.target as HTMLFormElement);
+    const code = String(fd.get("code") ?? "").trim();
+    const note = document.querySelector("#invite-form-note");
+    if (code.length < 6) {
+      if (note) note.textContent = "Invite codes are at least 6 characters.";
+      return;
+    }
+    location.hash = `#/leagues/join/${encodeURIComponent(code)}`;
   });
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-league]")) {
     button.addEventListener("click", () => { location.hash = `#/leagues/${button.dataset.league}`; });
   }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-board]")) {
     button.addEventListener("click", () => { location.hash = `#/leagues/${button.dataset.board}/leaderboard`; });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy-invite]")) {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copyInvite ?? "");
+        button.textContent = "Copied";
+      } catch { /* ignore */ }
+    });
   }
 }
 
@@ -1257,7 +1380,11 @@ async function renderLeagueCreate(): Promise<void> {
     <form id="league-form" class="card">
       <label>Name <input name="name" maxlength="48" required placeholder="Friday Five" /></label>
       <label>Match <select name="matchId" required>${options || "<option value=''>No upcoming matches</option>"}</select></label>
-      <label>Capacity <input name="capacity" type="number" min="2" max="50" value="8" required /></label>
+      <label>Capacity
+        <select name="capacity" required>
+          ${[2, 4, 5, 8, 10, 12, 20, 50].map((n) => `<option value="${n}" ${n === 8 ? "selected" : ""}>${n} players</option>`).join("")}
+        </select>
+      </label>
       <p class="note">FREE · invite link · no USDC · no prize pool</p>
       <div class="row"><button class="primary" type="submit">Create</button><a class="back-link" href="#/leagues">Cancel</a></div>
       <p class="quiet" id="league-note"></p>
@@ -1269,6 +1396,8 @@ async function renderLeagueCreate(): Promise<void> {
     const fd = new FormData(form);
     void (async () => {
       const note = document.querySelector("#league-note");
+      const submit = form.querySelector("button[type=submit]") as HTMLButtonElement | null;
+      if (submit) submit.disabled = true;
       try {
         const created = await api<{ league: LeagueCard }>("/leagues", {
           method: "POST",
@@ -1282,6 +1411,7 @@ async function renderLeagueCreate(): Promise<void> {
         location.hash = `#/leagues/${created.league.id}`;
       } catch (error) {
         if (note) note.textContent = error instanceof Error ? error.message : "Create failed";
+        if (submit) submit.disabled = false;
       }
     })();
   });
@@ -1289,26 +1419,48 @@ async function renderLeagueCreate(): Promise<void> {
 
 async function renderLeagueJoin(code: string): Promise<void> {
   app.innerHTML = shell("Join FREE league", loading());
-  const preview = await api<{ league: LeagueCard }>(`/leagues/invite/${encodeURIComponent(code)}`);
+  let preview: { league: LeagueCard };
+  try {
+    preview = await api<{ league: LeagueCard }>(`/leagues/invite/${encodeURIComponent(code)}`);
+  } catch (error) {
+    app.innerHTML = shell("Join FREE league", `
+      <article class="card">
+        <p class="note">${escapeText(error instanceof Error ? error.message : "Invalid invite")}</p>
+        <a class="back-link" href="#/leagues">← Leagues</a>
+      </article>
+    `);
+    return;
+  }
   const league = preview.league;
+  const hasXi = Boolean(state.teamVersionId && state.teamMatchId === league.matchId);
+  const needsXi = !league.youJoined && !hasXi;
   app.innerHTML = shell("Join FREE league", `
     <article class="card">
-      <div class="meta"><span class="badge badge-free">FREE</span><span>${league.memberCount}/${league.capacity}</span></div>
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${league.memberCount}/${league.capacity}</span><span>${escapeText(league.status)}</span></div>
       <h3>${escapeText(league.name)}</h3>
-      <p class="quiet">Invite ${escapeText(league.inviteCode)} · ${escapeText(league.lifecycleBucket)}</p>
-      <p class="note">Uses your saved XI for this match. No USDC.</p>
+      <p class="quiet">Invite <span class="mono">${escapeText(league.inviteCode)}</span> · ${escapeText(league.lifecycleBucket)}</p>
+      ${needsXi ? `<p class="note">An XI for this match is required before you can join. Build your XI, then you will return here automatically.</p>` : `<p class="note">Uses your saved XI for this match. No USDC. One-tap join.</p>`}
+      ${league.youJoined ? `<p class="note">You already joined this league.</p>` : ""}
       <div class="row">
-        <button class="primary" id="confirm-join" ${league.youJoined ? "disabled" : ""}>${league.youJoined ? "Already joined" : "Join"}</button>
+        ${needsXi
+          ? `<button class="primary" id="build-xi-return">Build XI for this match</button>`
+          : `<button class="primary" id="confirm-join" ${league.youJoined ? "disabled" : ""}>${league.youJoined ? "Already joined" : "Join league"}</button>`}
         <a class="back-link" href="#/leagues">Back</a>
       </div>
       <p class="quiet" id="join-note"></p>
     </article>
   `);
+  document.querySelector("#build-xi-return")?.addEventListener("click", () => {
+    writeLeagueReturn({ inviteCode: league.inviteCode, matchId: league.matchId, leagueId: league.id });
+    location.hash = `#/matches/${league.matchId}/xi`;
+  });
   document.querySelector("#confirm-join")?.addEventListener("click", () => {
     void (async () => {
       const note = document.querySelector("#join-note");
       try {
         if (!state.teamVersionId || state.teamMatchId !== league.matchId) {
+          writeLeagueReturn({ inviteCode: league.inviteCode, matchId: league.matchId, leagueId: league.id });
+          if (note) note.textContent = "XI required — opening builder…";
           location.hash = `#/matches/${league.matchId}/xi`;
           return;
         }
@@ -1317,12 +1469,32 @@ async function renderLeagueJoin(code: string): Promise<void> {
           headers: { "idempotency-key": `lgj-${Date.now()}` },
           body: JSON.stringify({ inviteCode: league.inviteCode, teamVersionId: state.teamVersionId }),
         });
+        clearLeagueReturn();
         location.hash = `#/leagues/${joined.league.id}`;
       } catch (error) {
         if (note) note.textContent = error instanceof Error ? error.message : "Join failed";
       }
     })();
   });
+
+  // Auto one-action join when returning from XI builder with context preserved.
+  if (!league.youJoined && hasXi && readLeagueReturn()?.inviteCode === league.inviteCode) {
+    const note = document.querySelector("#join-note");
+    if (note) note.textContent = "XI ready — joining…";
+    void (async () => {
+      try {
+        const joined = await api<{ league: LeagueCard }>("/leagues/join", {
+          method: "POST",
+          headers: { "idempotency-key": `lgj-auto-${Date.now()}` },
+          body: JSON.stringify({ inviteCode: league.inviteCode, teamVersionId: state.teamVersionId }),
+        });
+        clearLeagueReturn();
+        location.hash = `#/leagues/${joined.league.id}`;
+      } catch (error) {
+        if (note) note.textContent = error instanceof Error ? error.message : "Join failed";
+      }
+    })();
+  }
 }
 
 async function renderLeagueDetail(id: string): Promise<void> {
@@ -1332,21 +1504,34 @@ async function renderLeagueDetail(id: string): Promise<void> {
   app.innerHTML = shell(escapeText(league.name), `
     <article class="card">
       <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span><span>${escapeText(league.lifecycleBucket)}</span></div>
-      <p class="quiet">${league.memberCount} / ${league.capacity} members${league.isOwner ? " · you own this league" : ""}</p>
-      <p>Invite code <strong class="mono">${escapeText(league.inviteCode)}</strong></p>
+      <p class="quiet">${league.memberCount} / ${league.capacity} members${league.isOwner ? " · you own this league" : ""}${league.youJoined ? " · joined" : ""}</p>
+      <p>Invite code <strong class="mono">${escapeText(league.inviteCode)}</strong>
+        <button class="ghost" id="copy-invite" type="button">Copy</button></p>
       <p class="quiet">Share path: ${escapeText(league.invitePath)}</p>
       <div class="row">
         <button class="primary" data-board="${league.id}">Leaderboard</button>
         <button class="ghost" data-xi="${league.matchId}">Build / review XI</button>
+        <button class="ghost" id="league-share-btn">Share result</button>
         <a class="back-link" href="#/leagues">← Leagues</a>
       </div>
+      <div id="share-slot"></div>
     </article>
   `);
+  document.querySelector("#copy-invite")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(league.inviteCode);
+      const btn = document.querySelector("#copy-invite");
+      if (btn) btn.textContent = "Copied";
+    } catch { /* ignore */ }
+  });
   document.querySelector("[data-board]")?.addEventListener("click", () => {
     location.hash = `#/leagues/${id}/leaderboard`;
   });
   document.querySelector("[data-xi]")?.addEventListener("click", () => {
     location.hash = `#/matches/${league.matchId}/xi`;
+  });
+  document.querySelector("#league-share-btn")?.addEventListener("click", () => {
+    location.hash = `#/share/league/${id}`;
   });
 }
 
@@ -1355,6 +1540,7 @@ async function renderLeagueLeaderboard(id: string): Promise<void> {
   const board = await api<{
     league: LeagueCard;
     freshness: string;
+    scoreSnapshotId?: string | null;
     rows: Array<{ rank: number; wallet: string; milliPoints: number; you: boolean }>;
   }>(`/leagues/${id}/leaderboard`);
   const rows = board.rows.map((row) =>
@@ -1364,10 +1550,11 @@ async function renderLeagueLeaderboard(id: string): Promise<void> {
       milliPoints: row.milliPoints,
       you: row.you,
     }),
-  ).join("") || empty("No members scored yet.");
+  ).join("") || empty("No members yet. Share the invite code to fill this FREE league.");
   app.innerHTML = shell(escapeText(board.league.name), `
     <div class="lb-head">
       <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(freshnessChipLabel(board.freshness))}</span></div>
+      ${board.scoreSnapshotId ? `<div class="quiet mono">snapshot ${escapeText(board.scoreSnapshotId.slice(0, 48))}…</div>` : ""}
     </div>
     ${freshnessBannerHtml(board.freshness === "UNKNOWN" ? "UNKNOWN" : board.freshness === "FINAL" ? null : board.freshness)}
     <div class="leaderboard">${rows}</div>
@@ -1378,19 +1565,52 @@ async function renderLeagueLeaderboard(id: string): Promise<void> {
     <div id="share-slot"></div>
   `);
   document.querySelector("#league-share")?.addEventListener("click", () => {
-    void (async () => {
-      const slot = document.querySelector("#share-slot");
-      if (!slot) return;
-      const payload = await api<{ share: {
-        matchLabel: string; label: string; rank: number | null; score: number | null;
-        captain: string | null; note: string; text: string; url: string;
-      } }>(`/leagues/${id}/share`);
-      slot.innerHTML = shareCardHtml(payload.share);
-      document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(payload.share.text); } catch { /* ignore */ }
-      });
-    })();
+    location.hash = `#/share/league/${id}`;
   });
+}
+
+async function renderShareContest(contestId: string): Promise<void> {
+  app.innerHTML = shell("Share FREE result", loading());
+  try {
+    const payload = await api<{ share: {
+      matchLabel: string; label: string; rank: number | null; score: number | null;
+      captain: string | null; note: string; text: string; url: string; sharePath?: string;
+    } }>(`/contests/${contestId}/share`);
+    app.innerHTML = shell("Share FREE result", `
+      ${shareCardHtml(payload.share)}
+      <div class="row" style="margin-top:12px">
+        <a class="back-link" href="#/contests/${contestId}/result">← Result</a>
+        <a class="ghost" href="${escapeText(payload.share.sharePath ?? `/share/contest/${contestId}`)}" target="_blank" rel="noopener">OG page</a>
+      </div>
+    `);
+    document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(payload.share.text); } catch { /* ignore */ }
+    });
+  } catch (error) {
+    app.innerHTML = shell("Share FREE result", empty(error instanceof Error ? error.message : "Share unavailable"));
+  }
+}
+
+async function renderShareLeague(leagueId: string): Promise<void> {
+  app.innerHTML = shell("Share FREE league", loading());
+  try {
+    const payload = await api<{ share: {
+      matchLabel: string; label: string; rank: number | null; score: number | null;
+      captain: string | null; note: string; text: string; url: string; sharePath?: string;
+    } }>(`/leagues/${leagueId}/share`);
+    app.innerHTML = shell("Share FREE league", `
+      ${shareCardHtml(payload.share)}
+      <div class="row" style="margin-top:12px">
+        <a class="back-link" href="#/leagues/${leagueId}">← League</a>
+        <a class="ghost" href="${escapeText(payload.share.sharePath ?? `/share/league/${leagueId}`)}" target="_blank" rel="noopener">OG page</a>
+      </div>
+    `);
+    document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(payload.share.text); } catch { /* ignore */ }
+    });
+  } catch (error) {
+    app.innerHTML = shell("Share FREE league", empty(error instanceof Error ? error.message : "Share unavailable"));
+  }
 }
 
 async function renderProfile(wallet: string | null): Promise<void> {

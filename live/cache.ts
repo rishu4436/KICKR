@@ -89,6 +89,10 @@ export class LiveScoreCache {
     return cacheKey(this.env, "liveboard", matchId);
   }
 
+  private leagueBoardKey(leagueId: string): string {
+    return cacheKey(this.env, "leagueboard", leagueId);
+  }
+
   async writeMatch(score: MatchLiveScoreCache): Promise<void> {
     await this.redis.set(this.matchKey(score.matchId), serializeCacheValue(score));
     for (const player of score.playerScores) {
@@ -126,6 +130,22 @@ export class LiveScoreCache {
       return null;
     }
     return deserializeCacheValue<LeaderboardCache>(raw);
+  }
+
+  async writeLeagueLeaderboard(leagueId: string, board: LeaderboardCache): Promise<void> {
+    await this.redis.set(this.leagueBoardKey(leagueId), serializeCacheValue(board));
+  }
+
+  async readLeagueLeaderboard(leagueId: string): Promise<LeaderboardCache | null> {
+    const raw = await this.redis.get(this.leagueBoardKey(leagueId));
+    if (!raw) {
+      return null;
+    }
+    return deserializeCacheValue<LeaderboardCache>(raw);
+  }
+
+  async clearLeagueLeaderboard(leagueId: string): Promise<void> {
+    await this.redis.del(this.leagueBoardKey(leagueId));
   }
 
   async clearMatch(matchId: string, playerIds: readonly string[], teamIds: readonly string[]): Promise<void> {

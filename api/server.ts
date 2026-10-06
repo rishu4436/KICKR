@@ -25,6 +25,7 @@ import { registerOpsRoutes } from "./ops.js";
 import { registerDevE2eRoutes } from "./dev-e2e.js";
 import { registerLeagueRoutes } from "./leagues.js";
 import { registerProfileRoutes } from "./profile.js";
+import { registerSharePages } from "./share-pages.js";
 import type { FootballStore } from "../football/store.js";
 import type { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 import type { LiveScoringService } from "../live/service.js";
@@ -309,6 +310,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
   registerLeagueRoutes(app, deps, (c) => authenticate(deps, c));
   registerProfileRoutes(app, deps, (c) => authenticate(deps, c));
+  registerSharePages(app, deps);
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));
