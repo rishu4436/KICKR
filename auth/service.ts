@@ -229,6 +229,7 @@ export class AuthService {
     return this.accounts.insert({
       id: newId(),
       walletAddress,
+      displayName: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,

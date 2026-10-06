@@ -8,8 +8,22 @@ import type { ProviderEvent, ProviderPlayer, ProviderSquadRow, SportsCatalog, Sp
 
 const SOURCE = {
   provider: "local-dev",
-  label: "development data, not a live feed",
+  label: "DEMO / LOCAL_DEV fictional data — not Sportmonks, not a live feed",
   fetchedAt: "2026-10-01T00:00:00.000Z",
+};
+
+/** Believable fictional names. shortName stays A/B codes for test selectors. */
+const DEMO_NAMES_A: Record<string, string[]> = {
+  GK: ["Jonah Pike", "Ellis Crowe"],
+  DEF: ["Mateo Rivas", "Owen Brandt", "Kai Okonkwo", "Felix Dunn", "Arjun Mehta"],
+  MID: ["Luca Varela", "Noah Kessler", "Ibrahim Diallo", "Theo March", "Soren Blake"],
+  FWD: ["Rafael Costa", "Milo Hart", "Yusuf Kamara", "Finn Aldridge"],
+};
+const DEMO_NAMES_B: Record<string, string[]> = {
+  GK: ["Hugo Lennox", "Pavel Orth"],
+  DEF: ["Diego Marquez", "Callum Frost", "Kenji Sato", "Bruno Almeida", "Nils Berger"],
+  MID: ["Enzo Ricci", "Jamal Pierce", "Victor Holm", "Omar Farid", "Sean Quinn"],
+  FWD: ["Andre Silva", "Leo Navarro", "Chris Patton", "Darius Cole"],
 };
 
 export const LOCAL_DEV_CLUB_A = "20000000-0000-4000-8000-000000000001";
@@ -30,14 +44,17 @@ const ROLE_PLAN: readonly { role: PlayerRole; count: number }[] = [
 ];
 
 function buildPlayers(club: number, clubId: string, label: string): ProviderPlayer[] {
+  const names = label === "A" ? DEMO_NAMES_A : DEMO_NAMES_B;
   const players: ProviderPlayer[] = [];
   let index = 1;
   for (const group of ROLE_PLAN) {
     for (let n = 0; n < group.count; n += 1) {
       const id = playerId(club, index);
+      const displayName = names[group.role]?.[n] ?? `${label} ${group.role} ${n + 1}`;
       players.push({
         id,
-        displayName: `${label} ${group.role} ${n + 1}`,
+        displayName,
+        // Keep AF1 / BM2 short codes so existing tests and XI pickers stay stable.
         shortName: `${label}${group.role.slice(0, 1)}${n + 1}`,
         position: group.role,
         clubId,
@@ -51,6 +68,7 @@ function buildPlayers(club: number, clubId: string, label: string): ProviderPlay
 }
 
 function creditFor(player: ProviderPlayer): number {
+  // Keep FWD1 premium; others flat so classic XI fixtures stay at 99 credits.
   if (player.position === "FWD" && player.shortName.endsWith("1")) {
     return 15;
   }
@@ -170,8 +188,8 @@ export function buildLocalDevCatalog(): SportsCatalog {
       homeClubId: LOCAL_DEV_CLUB_A,
       awayClubId: LOCAL_DEV_CLUB_B,
       kickoffAt: "2026-10-10T15:00:00.000Z",
-      competition: "DEV Cup",
-      venue: "Dev Stadium",
+      competition: "DEMO Cup (LOCAL_DEV)",
+      venue: "DEMO Pitch — fictional",
       externalFixtureId: "dev-fixture-upcoming",
       status: "LINEUPS_AVAILABLE" as const,
       lineupAvailable: true,
@@ -182,8 +200,8 @@ export function buildLocalDevCatalog(): SportsCatalog {
       homeClubId: LOCAL_DEV_CLUB_A,
       awayClubId: LOCAL_DEV_CLUB_B,
       kickoffAt: "2026-10-03T12:00:00.000Z",
-      competition: "DEV Cup",
-      venue: "Dev Stadium",
+      competition: "DEMO Cup (LOCAL_DEV)",
+      venue: "DEMO Pitch — fictional",
       externalFixtureId: "dev-fixture-live",
       status: "LIVE" as const,
       lineupAvailable: true,
@@ -194,7 +212,7 @@ export function buildLocalDevCatalog(): SportsCatalog {
       homeClubId: LOCAL_DEV_CLUB_A,
       awayClubId: LOCAL_DEV_CLUB_B,
       kickoffAt: "2026-10-01T15:00:00.000Z",
-      competition: "DEV Cup",
+      competition: "DEMO Cup (LOCAL_DEV)",
       venue: null,
       externalFixtureId: "dev-fixture-final",
       status: "FINAL" as const,
@@ -204,8 +222,8 @@ export function buildLocalDevCatalog(): SportsCatalog {
   ];
   return {
     clubs: [
-      { id: LOCAL_DEV_CLUB_A, name: "Team A", shortName: "TMA", providerId: "dev-club-a" },
-      { id: LOCAL_DEV_CLUB_B, name: "Team B", shortName: "TMB", providerId: "dev-club-b" },
+      { id: LOCAL_DEV_CLUB_A, name: "Northbridge FC", shortName: "NBF", providerId: "dev-club-a" },
+      { id: LOCAL_DEV_CLUB_B, name: "Riverdale United", shortName: "RVU", providerId: "dev-club-b" },
     ],
     players,
     matches,
@@ -276,8 +294,8 @@ export function buildEphemeralLocalDevMatch(seed = Date.now()): {
     homeClubId: LOCAL_DEV_CLUB_A,
     awayClubId: LOCAL_DEV_CLUB_B,
     kickoffAt,
-    competition: "DEV Cup E2E",
-    venue: "Dev Stadium",
+    competition: "DEMO Cup E2E (LOCAL_DEV)",
+    venue: "DEMO Pitch — fictional",
     externalFixtureId: `dev-e2e-${hex}`,
     status: "LINEUPS_AVAILABLE" as const,
     lineupAvailable: true,

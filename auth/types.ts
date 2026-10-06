@@ -1,6 +1,7 @@
 export interface AccountRecord {
   id: string;
   walletAddress: string;
+  displayName: string | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
@@ -35,6 +36,8 @@ export interface AccountRepository {
   listAll(): Promise<AccountRecord[]>;
   /** Soft-disable. Sets deleted_at. Does not delete the wallet row. */
   suspend(id: string, now: Date): Promise<boolean>;
+  /** Optional Phase 13 profile field. */
+  updateDisplayName?(id: string, displayName: string, now: Date): Promise<AccountRecord | null>;
 }
 
 export interface NonceRepository {

@@ -45,6 +45,16 @@ export class InMemoryAccountRepository implements AccountRepository {
     row.updatedAt = now;
     return true;
   }
+
+  async updateDisplayName(id: string, displayName: string, now: Date) {
+    const row = this.byId.get(id);
+    if (!row || row.deletedAt) {
+      return null;
+    }
+    row.displayName = displayName;
+    row.updatedAt = now;
+    return { ...row };
+  }
 }
 
 export class InMemoryNonceRepository implements NonceRepository {

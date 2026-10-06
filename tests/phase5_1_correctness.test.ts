@@ -491,6 +491,13 @@ describe("Phase 5.1 production correctness", () => {
       ingestionLagMs: 200,
     });
     expect(stale).toBe("STALE");
+    const unknown = computeFreshness({
+      matchStatus: "LIVE",
+      now,
+      lastSuccessfulPollAt: null,
+      ingestionLagMs: null,
+    });
+    expect(unknown).toBe("UNKNOWN");
     const fallback = occurrenceFromKickoffMinute("2026-10-02T15:00:00.000Z", 12, 0);
     expect(fallback.timestampSource).toBe("kickoff_plus_minute");
     expect(fallback.timestamp).toBe("2026-10-02T15:12:00.000Z");

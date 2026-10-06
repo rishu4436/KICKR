@@ -50,6 +50,10 @@ export const AUDIT_EVENTS = [
   "LOCAL_DEV_FREE_FINALIZE",
   "LOCAL_DEV_MATCH_SEEDED",
   "LOCAL_DEV_MATCH_ADVANCED",
+  "LEAGUE_CREATED",
+  "LEAGUE_JOINED",
+  "LEAGUE_RESULT_FINALIZED",
+  "PROFILE_UPDATED",
 ] as const;
 
 export type AuditEventName = (typeof AUDIT_EVENTS)[number];

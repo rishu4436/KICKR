@@ -28,9 +28,29 @@ import {
   matchTitle,
   playerChip,
   lbRowHtml,
+  freshnessBannerHtml,
+  freshnessChipLabel,
+  shareCardHtml,
+  onboardingChecklistHtml,
 } from "./format.js";
 
 Object.assign(globalThis, { Buffer });
+
+const ONBOARD_KEY = "kickr.onboarding.seen";
+function onboardingSeen(): boolean {
+  return sessionStorage.getItem(ONBOARD_KEY) === "1";
+}
+function dismissOnboarding(): void {
+  sessionStorage.setItem(ONBOARD_KEY, "1");
+}
+function bindOnboardingDismiss(): void {
+  document.querySelector("[data-dismiss-onboarding]")?.addEventListener("click", () => {
+    dismissOnboarding();
+    void render();
+  });
+}
+
+
 
 interface MatchCard {
   id: string;
@@ -249,13 +269,15 @@ function shell(title: string, body: string): string {
       <div class="nav">
         <a href="#/" ${hash === "#/" || hash.startsWith("#/matches") ? 'aria-current="page"' : ""}>Matches</a>
         <a href="#/my-contests" ${hash.startsWith("#/my-contests") ? 'aria-current="page"' : ""}>My Contests</a>
+        <a href="#/leagues" ${hash.startsWith("#/leagues") ? 'aria-current="page"' : ""}>Leagues</a>
+        <a href="#/profile" ${hash.startsWith("#/profile") || hash.startsWith("#/u/") ? 'aria-current="page"' : ""}>Profile</a>
       </div>
       <div class="quiet auth-label" data-auth-label>${escapeText(auth)}</div>
     </div>
     <h1>${title}</h1>
     ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
     ${body}
-    <p class="note">FREE contests need no USDC. Credits are a squad budget, not money. Paid Devnet contests stay available only in development.</p>
+    <p class="note">FREE contests &amp; private leagues need no USDC. Credits are a squad budget, not money. Paid Devnet contests stay available only in development.</p>
   </div>`;
 }
 
@@ -293,6 +315,34 @@ async function render(): Promise<void> {
           if (note) note.textContent = error instanceof Error ? error.message : "Wallet sign-in failed";
         });
       });
+      return;
+    }
+        if (hash === "#/leagues" || hash === "#/leagues/") {
+      await renderLeaguesHome();
+      return;
+    }
+    if (hash === "#/leagues/create") {
+      await renderLeagueCreate();
+      return;
+    }
+    if (hash.startsWith("#/leagues/join/")) {
+      await renderLeagueJoin(hash.split("/")[3] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/leagues/") && hash.endsWith("/leaderboard")) {
+      await renderLeagueLeaderboard(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/leagues/") && hash.split("/").length === 3) {
+      await renderLeagueDetail(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash === "#/profile") {
+      await renderProfile(state.walletAddress);
+      return;
+    }
+    if (hash.startsWith("#/u/")) {
+      await renderProfile(decodeURIComponent(hash.slice(4)));
       return;
     }
     if (hash === "#/my-contests") {
@@ -347,12 +397,21 @@ async function renderList(): Promise<void> {
         <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "View live" : "Closed"}</button>
       </div>
     </article>`).join("");
+  const onboard = onboardingChecklistHtml(onboardingSeen(), [
+    { done: Boolean(state.token), label: "Connect / sign in", href: "#/" },
+    { done: false, label: "Choose a match", href: "#/" },
+    { done: Boolean(state.teamVersionId), label: "Build XI + captain/vice", href: "#/" },
+    { done: false, label: "Join a FREE contest", href: "#/my-contests" },
+    { done: false, label: "Follow the leaderboard", href: "#/my-contests" },
+  ]);
   app.innerHTML = shell("Matches", `
+    ${onboard}
     <div class="tabs">
       ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-bucket="${bucket}" aria-pressed="${state.bucket === bucket}">${bucket}</button>`).join("")}
     </div>
-    ${cards || empty("No matches in this view.")}
+    ${cards || empty("No matches in this view. Try LOCAL_DEV / DEMO Cup fixtures.")}
   `);
+  bindOnboardingDismiss();
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-bucket]")) {
     button.addEventListener("click", () => {
       state.bucket = button.dataset.bucket as typeof state.bucket;
@@ -690,9 +749,7 @@ async function renderLeaderboard(contestId: string): Promise<void> {
       } else {
         rowsHtml = empty("No scored entries yet for this contest.");
       }
-      if (freshness === "STALE") {
-        staleNote = `<div class="errors">Live data is delayed — scores may catch up shortly.</div>`;
-      }
+      staleNote = freshnessBannerHtml(freshness);
     }
   } catch {
     rowsHtml = empty("Could not load leaderboard.");
@@ -705,7 +762,7 @@ async function renderLeaderboard(contestId: string): Promise<void> {
   app.innerHTML = shell(live ? "Live leaderboard" : "Leaderboard", `
     <div class="lb-head">
       <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span>${live ? '<span class="badge badge-live">LIVE</span>' : statusChip(card.matchStatus ?? bucket, bucket)}</div>
-      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshness)}` : ""}</div>
+      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshnessChipLabel(freshness))}` : ""}</div>
     </div>
     ${matchLabel ? `<p class="quiet" style="margin:4px 0 12px">${escapeText(matchLabel)}</p>` : ""}
     ${staleNote}
@@ -848,14 +905,38 @@ async function renderResult(contestId: string): Promise<void> {
         <div class="leaderboard" style="margin-top:12px">${boardHtml}</div>
       </article>
 
+      <div id="share-slot"></div>
       <div class="row" style="margin-top:8px">
         <a class="quiet" href="#/contests/${contestId}/leaderboard">Full leaderboard</a>
         <a class="quiet" href="#/my-contests">My Contests</a>
+        <button class="ghost" id="load-share">Share FREE result</button>
       </div>
     `);
     document.querySelector("#claim-btn")?.addEventListener("click", () => {
       const target = document.querySelector("#claim-target");
       if (target) void startClaim(contestId, result.entryId, target);
+    });
+    document.querySelector("#load-share")?.addEventListener("click", () => {
+      void (async () => {
+        const slot = document.querySelector("#share-slot");
+        if (!slot) return;
+        try {
+          const payload = await api<{ share: {
+            matchLabel: string; label: string; rank: number | null; score: number | null;
+            captain: string | null; note: string; text: string; url: string;
+          } }>(`/contests/${contestId}/share`);
+          slot.innerHTML = shareCardHtml(payload.share);
+          document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
+            try {
+              await navigator.clipboard.writeText(payload.share.text);
+            } catch {
+              /* ignore */
+            }
+          });
+        } catch (error) {
+          slot.innerHTML = `<p class="error">${escapeText(error instanceof Error ? error.message : "Share failed")}</p>`;
+        }
+      })();
     });
   } catch (error) {
     app.innerHTML = shell("Your result", empty(error instanceof Error ? error.message : "No confirmed entry yet."));
@@ -1117,6 +1198,255 @@ async function saveXi(matchId: string, existingTeamId: string | null = null): Pr
   const note = document.querySelector("#saved");
   if (note) note.textContent = `Saved version ${saved.version.version}. Continue to contests to join FREE.`;
 }
+
+
+interface LeagueCard {
+  id: string;
+  name: string;
+  matchId: string;
+  inviteCode: string;
+  invitePath: string;
+  capacity: number;
+  memberCount: number;
+  remaining: number;
+  status: string;
+  lifecycleBucket: string;
+  isOwner: boolean;
+  youJoined: boolean;
+  free: boolean;
+}
+
+async function renderLeaguesHome(): Promise<void> {
+  app.innerHTML = shell("Private FREE leagues", loading());
+  const data = await api<{ leagues: LeagueCard[] }>("/leagues/mine");
+  const cards = data.leagues.map((league) => `<article class="card">
+    <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span><span>${escapeText(league.lifecycleBucket)}</span></div>
+    <h3>${escapeText(league.name)}</h3>
+    <p class="quiet">${league.memberCount} / ${league.capacity} members · invite ${escapeText(league.inviteCode)}</p>
+    <div class="row">
+      <button class="primary" data-league="${league.id}">Open</button>
+      <button class="ghost" data-board="${league.id}">Leaderboard</button>
+    </div>
+  </article>`).join("");
+  app.innerHTML = shell("Private FREE leagues", `
+    <p class="quiet">Invite-only FREE leagues. No USDC, no prize, no settlement.</p>
+    <div class="row" style="margin-bottom:14px">
+      <button class="primary" id="create-league">Create league</button>
+      <button class="ghost" id="join-league">Join with invite</button>
+    </div>
+    ${cards || empty("No leagues yet. Create one or join with an invite code.")}
+  `);
+  document.querySelector("#create-league")?.addEventListener("click", () => { location.hash = "#/leagues/create"; });
+  document.querySelector("#join-league")?.addEventListener("click", () => {
+    const code = prompt("Invite code");
+    if (code) location.hash = `#/leagues/join/${encodeURIComponent(code.trim())}`;
+  });
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-league]")) {
+    button.addEventListener("click", () => { location.hash = `#/leagues/${button.dataset.league}`; });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-board]")) {
+    button.addEventListener("click", () => { location.hash = `#/leagues/${button.dataset.board}/leaderboard`; });
+  }
+}
+
+async function renderLeagueCreate(): Promise<void> {
+  app.innerHTML = shell("Create FREE league", loading());
+  const matches = await api<{ matches: MatchCard[] }>("/matches?bucket=upcoming");
+  const options = matches.matches.map((m) => `<option value="${m.id}">${escapeText(matchTitle(m))}</option>`).join("");
+  app.innerHTML = shell("Create FREE league", `
+    <form id="league-form" class="card">
+      <label>Name <input name="name" maxlength="48" required placeholder="Friday Five" /></label>
+      <label>Match <select name="matchId" required>${options || "<option value=''>No upcoming matches</option>"}</select></label>
+      <label>Capacity <input name="capacity" type="number" min="2" max="50" value="8" required /></label>
+      <p class="note">FREE · invite link · no USDC · no prize pool</p>
+      <div class="row"><button class="primary" type="submit">Create</button><a class="back-link" href="#/leagues">Cancel</a></div>
+      <p class="quiet" id="league-note"></p>
+    </form>
+  `);
+  document.querySelector("#league-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const fd = new FormData(form);
+    void (async () => {
+      const note = document.querySelector("#league-note");
+      try {
+        const created = await api<{ league: LeagueCard }>("/leagues", {
+          method: "POST",
+          headers: { "idempotency-key": `lg-${Date.now()}` },
+          body: JSON.stringify({
+            name: String(fd.get("name") ?? ""),
+            matchId: String(fd.get("matchId") ?? ""),
+            capacity: Number(fd.get("capacity") ?? 8),
+          }),
+        });
+        location.hash = `#/leagues/${created.league.id}`;
+      } catch (error) {
+        if (note) note.textContent = error instanceof Error ? error.message : "Create failed";
+      }
+    })();
+  });
+}
+
+async function renderLeagueJoin(code: string): Promise<void> {
+  app.innerHTML = shell("Join FREE league", loading());
+  const preview = await api<{ league: LeagueCard }>(`/leagues/invite/${encodeURIComponent(code)}`);
+  const league = preview.league;
+  app.innerHTML = shell("Join FREE league", `
+    <article class="card">
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${league.memberCount}/${league.capacity}</span></div>
+      <h3>${escapeText(league.name)}</h3>
+      <p class="quiet">Invite ${escapeText(league.inviteCode)} · ${escapeText(league.lifecycleBucket)}</p>
+      <p class="note">Uses your saved XI for this match. No USDC.</p>
+      <div class="row">
+        <button class="primary" id="confirm-join" ${league.youJoined ? "disabled" : ""}>${league.youJoined ? "Already joined" : "Join"}</button>
+        <a class="back-link" href="#/leagues">Back</a>
+      </div>
+      <p class="quiet" id="join-note"></p>
+    </article>
+  `);
+  document.querySelector("#confirm-join")?.addEventListener("click", () => {
+    void (async () => {
+      const note = document.querySelector("#join-note");
+      try {
+        if (!state.teamVersionId || state.teamMatchId !== league.matchId) {
+          location.hash = `#/matches/${league.matchId}/xi`;
+          return;
+        }
+        const joined = await api<{ league: LeagueCard }>("/leagues/join", {
+          method: "POST",
+          headers: { "idempotency-key": `lgj-${Date.now()}` },
+          body: JSON.stringify({ inviteCode: league.inviteCode, teamVersionId: state.teamVersionId }),
+        });
+        location.hash = `#/leagues/${joined.league.id}`;
+      } catch (error) {
+        if (note) note.textContent = error instanceof Error ? error.message : "Join failed";
+      }
+    })();
+  });
+}
+
+async function renderLeagueDetail(id: string): Promise<void> {
+  app.innerHTML = shell("League", loading());
+  const data = await api<{ league: LeagueCard }>(`/leagues/${id}`);
+  const league = data.league;
+  app.innerHTML = shell(escapeText(league.name), `
+    <article class="card">
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span><span>${escapeText(league.lifecycleBucket)}</span></div>
+      <p class="quiet">${league.memberCount} / ${league.capacity} members${league.isOwner ? " · you own this league" : ""}</p>
+      <p>Invite code <strong class="mono">${escapeText(league.inviteCode)}</strong></p>
+      <p class="quiet">Share path: ${escapeText(league.invitePath)}</p>
+      <div class="row">
+        <button class="primary" data-board="${league.id}">Leaderboard</button>
+        <button class="ghost" data-xi="${league.matchId}">Build / review XI</button>
+        <a class="back-link" href="#/leagues">← Leagues</a>
+      </div>
+    </article>
+  `);
+  document.querySelector("[data-board]")?.addEventListener("click", () => {
+    location.hash = `#/leagues/${id}/leaderboard`;
+  });
+  document.querySelector("[data-xi]")?.addEventListener("click", () => {
+    location.hash = `#/matches/${league.matchId}/xi`;
+  });
+}
+
+async function renderLeagueLeaderboard(id: string): Promise<void> {
+  app.innerHTML = shell("League leaderboard", loading());
+  const board = await api<{
+    league: LeagueCard;
+    freshness: string;
+    rows: Array<{ rank: number; wallet: string; milliPoints: number; you: boolean }>;
+  }>(`/leagues/${id}/leaderboard`);
+  const rows = board.rows.map((row) =>
+    lbRowHtml({
+      rank: row.rank,
+      label: shortWallet(row.wallet),
+      milliPoints: row.milliPoints,
+      you: row.you,
+    }),
+  ).join("") || empty("No members scored yet.");
+  app.innerHTML = shell(escapeText(board.league.name), `
+    <div class="lb-head">
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(freshnessChipLabel(board.freshness))}</span></div>
+    </div>
+    ${freshnessBannerHtml(board.freshness === "UNKNOWN" ? "UNKNOWN" : board.freshness === "FINAL" ? null : board.freshness)}
+    <div class="leaderboard">${rows}</div>
+    <div class="row" style="margin-top:16px">
+      <a class="back-link" href="#/leagues/${id}">← League</a>
+      <button class="ghost" id="league-share">Share</button>
+    </div>
+    <div id="share-slot"></div>
+  `);
+  document.querySelector("#league-share")?.addEventListener("click", () => {
+    void (async () => {
+      const slot = document.querySelector("#share-slot");
+      if (!slot) return;
+      const payload = await api<{ share: {
+        matchLabel: string; label: string; rank: number | null; score: number | null;
+        captain: string | null; note: string; text: string; url: string;
+      } }>(`/leagues/${id}/share`);
+      slot.innerHTML = shareCardHtml(payload.share);
+      document.querySelector("[data-copy-share]")?.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(payload.share.text); } catch { /* ignore */ }
+      });
+    })();
+  });
+}
+
+async function renderProfile(wallet: string | null): Promise<void> {
+  if (!wallet) {
+    app.innerHTML = shell("Profile", empty("Sign in to view your profile."));
+    return;
+  }
+  app.innerHTML = shell("Profile", loading());
+  const data = await api<{ profile: {
+    wallet: string;
+    displayName: string | null;
+    contestsPlayed: number;
+    wins: number;
+    top3Finishes: number;
+    averagePoints: number;
+    recentContests: Array<{ kind: string; label: string; rank: number; scoreMilliPoints: number; id: string }>;
+    freeOnly: boolean;
+  } }>(wallet === state.walletAddress ? "/v1/me/profile" : `/v1/profile/${encodeURIComponent(wallet)}`);
+  const profile = data.profile;
+  const recent = profile.recentContests.map((row) =>
+    `<div class="lb-row"><div class="rank">#${row.rank}</div><div>${escapeText(row.label)} <span class="quiet">${escapeText(row.kind)}</span></div><div><strong>${(row.scoreMilliPoints / 1000).toFixed(1)}</strong></div></div>`
+  ).join("") || empty("No finalized FREE results yet.");
+  const editable = wallet === state.walletAddress;
+  app.innerHTML = shell(escapeText(profile.displayName || shortWallet(profile.wallet)), `
+    <article class="card">
+      <p class="quiet mono">${escapeText(profile.wallet)}</p>
+      <div class="result-stats">
+        <div><span class="quiet">Played</span><strong>${profile.contestsPlayed}</strong></div>
+        <div><span class="quiet">Wins</span><strong>${profile.wins}</strong></div>
+        <div><span class="quiet">Top 3</span><strong>${profile.top3Finishes}</strong></div>
+        <div><span class="quiet">Avg pts</span><strong>${profile.averagePoints.toFixed(1)}</strong></div>
+      </div>
+      <p class="note">FREE results only — no monetary stats.</p>
+      ${editable ? `<form id="name-form" class="row"><input name="displayName" maxlength="32" value="${escapeText(profile.displayName ?? "")}" placeholder="Display name" /><button class="ghost" type="submit">Save</button></form><p class="quiet" id="name-note"></p>` : ""}
+    </article>
+    <article class="card"><div class="meta"><span>Recent FREE results</span></div><div class="leaderboard">${recent}</div></article>
+  `);
+  document.querySelector("#name-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.target as HTMLFormElement);
+    void (async () => {
+      const note = document.querySelector("#name-note");
+      try {
+        await api("/v1/me/profile", {
+          method: "PATCH",
+          headers: { "idempotency-key": `name-${Date.now()}` },
+          body: JSON.stringify({ displayName: String(fd.get("displayName") ?? "") }),
+        });
+        void renderProfile(wallet);
+      } catch (error) {
+        if (note) note.textContent = error instanceof Error ? error.message : "Update failed";
+      }
+    })();
+  });
+}
+
 
 window.addEventListener("hashchange", () => { void render(); });
 void render();

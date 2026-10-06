@@ -33,6 +33,8 @@ import { createAttestorRegistry, parseApprovedAttestors } from "../attestation/r
 import { createAttestorVerifier } from "../attestation/verify.js";
 import { createSettlementAttestationGate } from "../attestation/gate.js";
 import { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
+import { LeagueService, createPgLeagueStore } from "../leagues/index.js";
+import { ProfileService } from "../profile/index.js";
 
 /**
  * API process entrypoint.
@@ -78,6 +80,7 @@ if (sports?.developmentOnly) {
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
 const contestStore = createPgContestStore(pool);
 const freeResults = createPgFreeResultStore(pool);
+const leagueStore = createPgLeagueStore(pool);
 const contests = new ContestService(
   contestStore,
   football,
@@ -164,6 +167,14 @@ const attestationGate = createSettlementAttestationGate({
 });
 const settlement = new SettlementService(createPgSettlementStore(db), attestationGate);
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
+const leagues = new LeagueService(leagueStore, football, auditStore);
+const profiles = new ProfileService(
+  createPgAccountRepository(db),
+  auditStore,
+  freeResults,
+  contestStore,
+  leagueStore,
+);
 const counters = new ReliabilityCounters();
 const app = createApp({
   config,
@@ -173,6 +184,8 @@ const app = createApp({
   football,
   footballStore,
   contests,
+  leagues,
+  profiles,
   scoringActors,
   live,
   settlement,

@@ -23,6 +23,8 @@ import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
 import { registerDevE2eRoutes } from "./dev-e2e.js";
+import { registerLeagueRoutes } from "./leagues.js";
+import { registerProfileRoutes } from "./profile.js";
 import type { FootballStore } from "../football/store.js";
 import type { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 import type { LiveScoringService } from "../live/service.js";
@@ -34,6 +36,8 @@ import type { AttestationStore } from "../attestation/types.js";
 import type { SettlementAttestationGate } from "../attestation/gate.js";
 import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
+import type { LeagueService } from "../leagues/service.js";
+import type { ProfileService } from "../profile/service.js";
 import { existsSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 
@@ -53,6 +57,8 @@ export interface AppDeps {
   /** Present when Postgres-backed; required by the local-dev E2E harness. */
   footballStore?: FootballStore;
   contests: ContestService;
+  leagues?: LeagueService;
+  profiles?: ProfileService;
   /** Dev-only LOCAL_DEV scoring actor registry. Absent / empty in production. */
   scoringActors?: LocalDevScoringActorRegistry;
   live?: LiveScoringService;
@@ -110,7 +116,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
       c.header("access-control-allow-origin", origin);
       c.header("vary", "Origin");
       c.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id");
-      c.header("access-control-allow-methods", "GET, POST, OPTIONS");
+      c.header("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
     }
     if (c.req.method === "OPTIONS") {
       return c.body(null, 204);
@@ -301,6 +307,8 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   );
   registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
   registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
+  registerLeagueRoutes(app, deps, (c) => authenticate(deps, c));
+  registerProfileRoutes(app, deps, (c) => authenticate(deps, c));
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));

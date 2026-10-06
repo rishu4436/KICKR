@@ -32,6 +32,8 @@ import type { SettlementRecord } from "../settlement/types.js";
 import { LOCAL_DEV_ATTESTOR_ID } from "../attestation/types.js";
 import type { SettlementAttestationGate } from "../attestation/gate.js";
 import type { AttestationStore } from "../attestation/types.js";
+import { InMemoryLeagueStore, LeagueService } from "../leagues/index.js";
+import { ProfileService } from "../profile/index.js";
 
 export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
   const pair = nacl.sign.keyPair();
@@ -123,8 +125,9 @@ export function buildTestApp(clock: Clock): {
   const config = testConfig();
   config.server.attestation.approvedAttestorsRaw = `${LOCAL_DEV_ATTESTOR_ID}:${localDevAttestor.publicKeyHex}`;
   const audit = new InMemoryAuditStore();
+  const accounts = new InMemoryAccountRepository();
   const auth = new AuthService(
-    new InMemoryAccountRepository(),
+    accounts,
     new InMemoryNonceRepository(),
     new InMemorySessionRepository(),
     audit,
@@ -144,6 +147,7 @@ export function buildTestApp(clock: Clock): {
   const redis = new InMemoryRedis();
   const contestStore = new InMemoryContestStore();
   const freeResults = new InMemoryFreeResultStore();
+  const leagueStore = new InMemoryLeagueStore();
   const contests = new ContestService(
     contestStore,
     football,
@@ -154,6 +158,8 @@ export function buildTestApp(clock: Clock): {
     true,
     freeResults,
   );
+  const leagues = new LeagueService(leagueStore, football, audit);
+  const profiles = new ProfileService(accounts, audit, freeResults, contestStore, leagueStore);
   const snapshots = new InMemorySnapshotStore();
   const attestations = new InMemoryAttestationStore();
   const registry = createAttestorRegistry([
@@ -179,6 +185,8 @@ export function buildTestApp(clock: Clock): {
     football,
     footballStore,
     contests,
+    leagues,
+    profiles,
     scoringActors,
     settlement,
     settlementOrchestrator,

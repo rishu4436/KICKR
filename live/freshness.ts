@@ -4,6 +4,12 @@ import type { LiveFreshness } from "./cache.js";
 /**
  * Freshness reflects provider/ingest health, not how long ago kickoff was.
  * A live match with a recent successful poll is LIVE even if kickoff was hours ago.
+ *
+ * Semantics (Phase 13):
+ * - LIVE: freshness known and current
+ * - STALE: freshness known and outside the threshold
+ * - UNKNOWN: no provider poll / freshness data available (never treat as STALE)
+ * - FINAL / DATA_ERROR: terminal / error paths
  */
 export interface FreshnessInput {
   matchStatus: MatchState;
@@ -26,7 +32,8 @@ export function computeFreshness(input: FreshnessInput): LiveFreshness {
     input.matchStatus === "FULL_TIME"
   ) {
     if (!input.lastSuccessfulPollAt) {
-      return "STALE";
+      // No Sportmonks / provider poll data — not the same as a known-stale feed.
+      return "UNKNOWN";
     }
     const age = input.now.getTime() - Date.parse(input.lastSuccessfulPollAt);
     if (!Number.isFinite(age) || age > staleAfterMs) {
@@ -58,4 +65,11 @@ export function occurrenceFromKickoffMinute(
     timestamp: new Date(ms).toISOString(),
     timestampSource: "kickoff_plus_minute",
   };
+}
+
+/** UI / API label for freshness chips. Never maps UNKNOWN → STALE. */
+export function freshnessLabel(freshness: LiveFreshness | string | null | undefined): string {
+  if (!freshness) return "";
+  if (freshness === "UNKNOWN") return "FRESHNESS UNKNOWN";
+  return freshness;
 }

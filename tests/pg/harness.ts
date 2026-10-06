@@ -27,6 +27,8 @@ import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../../sport
 import { createContestScoringSource } from "../../live/contest-scoring-source.js";
 import { LiveScoringService } from "../../live/service.js";
 import { LocalDevScoringActorRegistry } from "../../contests/free/local-dev-scoring-actor.js";
+import { LeagueService, createPgLeagueStore } from "../../leagues/index.js";
+import { ProfileService } from "../../profile/index.js";
 import { createApp, type AppDeps } from "../../api/server.js";
 import { silentLogger } from "../../shared/logger.js";
 import { generateWallet, signMessage, testConfig } from "../helpers.js";
@@ -65,6 +67,9 @@ export function requireTestDatabaseUrl(): string {
 
 const TRUNCATE_SQL = `
 TRUNCATE TABLE
+  private_league_results,
+  private_league_members,
+  private_leagues,
   free_contest_results,
   settlement_result_rows,
   settlement_reconciliations,
@@ -124,8 +129,9 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
   const db = asQueryable(pool);
   const config = testConfig({ databaseUrl, nodeEnv: "test" });
   const audit = createPgAuditStore(db);
+  const accountRepo = createPgAccountRepository(db);
   const auth = new AuthService(
-    createPgAccountRepository(db),
+    accountRepo,
     createPgNonceRepository(db),
     createPgSessionRepository(db),
     audit,
@@ -138,6 +144,7 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
   const redis = new InMemoryRedis();
   const contestStore = createPgContestStore(pool);
   const freeResults = createPgFreeResultStore(pool);
+  const leagueStore = createPgLeagueStore(pool);
   const contests = new ContestService(
     contestStore,
     football,
@@ -148,6 +155,8 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
     true,
     freeResults,
   );
+  const leagues = new LeagueService(leagueStore, football, audit);
+  const profiles = new ProfileService(accountRepo, audit, freeResults, contestStore, leagueStore);
   const scoringActors = new LocalDevScoringActorRegistry(
     { nodeEnv: config.server.nodeEnv, sportsDataProvider: config.public.sportsDataProvider },
     audit,
@@ -172,6 +181,8 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
     football,
     footballStore,
     contests,
+    leagues,
+    profiles,
     scoringActors,
     live,
     redis,

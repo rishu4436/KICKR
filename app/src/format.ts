@@ -112,3 +112,66 @@ export function creditsPanelHtml(used: number, cap: number, left: number): strin
   const meterClass = left <= 0 ? "meter full" : left <= 10 ? "meter warn" : "meter";
   return `<div class="credits-panel"><div><div class="quiet">Credits remaining</div><div class="credits-left">${left}</div></div><div class="xi-count">${used} / ${cap} used</div></div><div class="${meterClass}"><span style="width:${Math.min(100, (used / cap) * 100)}%"></span></div>`;
 }
+
+
+export function freshnessBannerHtml(freshness: string | null | undefined): string {
+  if (!freshness) return "";
+  if (freshness === "UNKNOWN") {
+    return `<div class="note freshness-unknown">FRESHNESS UNKNOWN — provider poll data is not available. Scores may still update from local events.</div>`;
+  }
+  if (freshness === "STALE") {
+    return `<div class="errors">Live data is delayed — scores may catch up shortly.</div>`;
+  }
+  if (freshness === "LIVE") {
+    return `<div class="note freshness-live">LIVE — provider freshness is current.</div>`;
+  }
+  return "";
+}
+
+export function freshnessChipLabel(freshness: string | null | undefined): string {
+  if (!freshness) return "";
+  if (freshness === "UNKNOWN") return "FRESHNESS UNKNOWN";
+  return freshness;
+}
+
+export function shareCardHtml(share: {
+  matchLabel: string;
+  label: string;
+  rank: number | null;
+  score: number | null;
+  captain: string | null;
+  note: string;
+  text: string;
+  url: string;
+}): string {
+  const scoreLabel = share.score != null ? share.score.toFixed(1) : "—";
+  const rankLabel = share.rank != null ? `#${share.rank}` : "—";
+  return `<article class="card share-card" data-share-text="${escapeText(share.text)}">
+    <p class="quiet">Shareable FREE result</p>
+    <h3>KICKR</h3>
+    <p><strong>${escapeText(share.matchLabel)}</strong></p>
+    <p class="quiet">${escapeText(share.label)} · Rank ${rankLabel} · ${escapeText(scoreLabel)} pts${share.captain ? ` · C: ${escapeText(share.captain)}` : ""}</p>
+    <p class="note">${escapeText(share.note)}</p>
+    <div class="row">
+      <button type="button" class="ghost" data-copy-share>Copy text</button>
+      <span class="quiet mono">${escapeText(share.url)}</span>
+    </div>
+  </article>`;
+}
+
+export function onboardingChecklistHtml(seen: boolean, steps: { done: boolean; label: string; href?: string }[]): string {
+  if (seen) return "";
+  const items = steps
+    .map((s) => {
+      const mark = s.done ? "✓" : "○";
+      const label = s.href && !s.done
+        ? `<a href="${escapeText(s.href)}">${escapeText(s.label)}</a>`
+        : escapeText(s.label);
+      return `<li class="${s.done ? "done" : ""}"><span>${mark}</span> ${label}</li>`;
+    })
+    .join("");
+  return `<aside class="onboarding card">
+    <div class="row"><strong>First-time FREE path</strong><button type="button" class="ghost" data-dismiss-onboarding>Got it</button></div>
+    <ol class="onboard-list">${items}</ol>
+  </aside>`;
+}

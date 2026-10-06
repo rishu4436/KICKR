@@ -1,7 +1,8 @@
 import type { RedisClient } from "../redis/client.js";
 import { cacheKey, deserializeCacheValue, serializeCacheValue } from "../redis/keys.js";
 
-export type LiveFreshness = "LIVE" | "STALE" | "FINAL" | "DATA_ERROR";
+/** LIVE/STALE require known poll data; UNKNOWN when provider freshness is null. */
+export type LiveFreshness = "LIVE" | "STALE" | "UNKNOWN" | "FINAL" | "DATA_ERROR";
 
 export interface PlayerLiveScoreCache {
   playerId: string;
