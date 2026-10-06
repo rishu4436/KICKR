@@ -27,6 +27,8 @@ The migration runner expects the process working directory to be the repository 
 | `npm test` | Vitest unit suite. No live Postgres or Redis. Excludes `tests/pg`. |
 | `npm run test:pg` | Postgres integration suite (`tests/pg`). Uses `KICKR_TEST_DATABASE_URL` or `DATABASE_URL` rewritten to `/kickr_test`. Loud-fails if unset or pointed at primary `kickr`. |
 | `npm run dev:e2e-free` | Only supported local FREE E2E (fresh match, forward-only lifecycle, real scoring/finalize). Blocked in production. No manual DB edits. Replaces the removed `dev:seed-free-ux` SQL workaround. |
+| `npm run demo:seed` | Seed DEMO catalog + FREE contests only. Requires `SPORTS_PROVIDER=DEMO`. Production also needs `DEMO_SEED_ENABLED=true`. Never paid/escrow/Solana. See `DEMO.md`. |
+| `npm run demo:ready` | Production-demo readiness check (FREE only, no LOCAL_DEV, DEMO or Sportmonks, DB/Redis, no custody keys). Also probes `/ready/demo` when `BASE_URL` is set. |
 | `cd escrow && anchor test --skip-deploy` | LiteSVM program tests. Not run by GitHub Actions. |
 | `npm run build` | Compile to `dist/` |
 | `npm run dev` | API via tsx |
@@ -50,7 +52,7 @@ Do not add escrow instructions, USDC transfers, scoring, sports ingestion, settl
 
 ## Phase 2 UI
 
-`npm run build` compiles the API and the Vite client into `dist/client`. `npm start` or `npm run dev` serves `/` from that folder when it exists. Set `SPORTS_DATA_PROVIDER=local-dev` and run migrations through `002` to load the fictional catalog. Sign-in on the page uses a development keypair, not a production wallet.
+`npm run build` compiles the API and the Vite client into `dist/client`. `npm start` or `npm run dev` serves `/` from that folder when it exists. For local UI, set `SPORTS_PROVIDER=LOCAL_DEV` (or legacy `SPORTS_DATA_PROVIDER=local-dev`) and run migrations. For a public demo, set `SPORTS_PROVIDER=DEMO` — see `DEMO.md`. Sign-in on the page uses a development keypair, not a production wallet.
 
 
 ## Postgres integration tests

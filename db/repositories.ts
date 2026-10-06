@@ -24,6 +24,7 @@ function mapAccount(row: Row): AccountRecord {
     id: asString(row.id),
     walletAddress: asString(row.wallet_address),
     displayName: asNullableString(row.display_name),
+    onboardingLeaderboardViewedAt: asNullableDate(row.onboarding_leaderboard_viewed_at),
     createdAt: asDate(row.created_at),
     updatedAt: asDate(row.updated_at),
     deletedAt: asNullableDate(row.deleted_at),
@@ -60,7 +61,7 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
   return {
     async findById(id: string): Promise<AccountRecord | null> {
       const result = await db.query<Row>(
-        `SELECT id, wallet_address, display_name, created_at, updated_at, deleted_at
+        `SELECT id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at
          FROM accounts WHERE id = $1`,
         [id],
       );
@@ -69,7 +70,7 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
     },
     async findByWallet(walletAddress: string): Promise<AccountRecord | null> {
       const result = await db.query<Row>(
-        `SELECT id, wallet_address, display_name, created_at, updated_at, deleted_at
+        `SELECT id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at
          FROM accounts WHERE wallet_address = $1`,
         [walletAddress],
       );
@@ -78,14 +79,15 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
     },
     async insert(account: AccountRecord): Promise<AccountRecord> {
       const result = await db.query<Row>(
-        `INSERT INTO accounts (id, wallet_address, display_name, created_at, updated_at, deleted_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO accounts (id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (wallet_address) DO NOTHING
-         RETURNING id, wallet_address, display_name, created_at, updated_at, deleted_at`,
+         RETURNING id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at`,
         [
           account.id,
           account.walletAddress,
           account.displayName,
+          account.onboardingLeaderboardViewedAt,
           account.createdAt,
           account.updatedAt,
           account.deletedAt,
@@ -96,7 +98,7 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
         return mapAccount(row);
       }
       const existing = await db.query<Row>(
-        `SELECT id, wallet_address, display_name, created_at, updated_at, deleted_at
+        `SELECT id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at
          FROM accounts WHERE wallet_address = $1`,
         [account.walletAddress],
       );
@@ -108,7 +110,7 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
     },
     async listAll(): Promise<AccountRecord[]> {
       const result = await db.query<Row>(
-        `SELECT id, wallet_address, display_name, created_at, updated_at, deleted_at
+        `SELECT id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at
          FROM accounts
          ORDER BY created_at ASC, id ASC`,
       );
@@ -129,8 +131,20 @@ export function createPgAccountRepository(db: Queryable): AccountRepository {
         `UPDATE accounts
          SET display_name = $2, updated_at = $3
          WHERE id = $1 AND deleted_at IS NULL
-         RETURNING id, wallet_address, display_name, created_at, updated_at, deleted_at`,
+         RETURNING id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at`,
         [id, displayName, now],
+      );
+      const row = result.rows[0];
+      return row ? mapAccount(row) : null;
+    },
+    async markOnboardingLeaderboardViewed(id: string, now: Date): Promise<AccountRecord | null> {
+      const result = await db.query<Row>(
+        `UPDATE accounts
+         SET onboarding_leaderboard_viewed_at = COALESCE(onboarding_leaderboard_viewed_at, $2),
+             updated_at = $2
+         WHERE id = $1 AND deleted_at IS NULL
+         RETURNING id, wallet_address, display_name, onboarding_leaderboard_viewed_at, created_at, updated_at, deleted_at`,
+        [id, now],
       );
       const row = result.rows[0];
       return row ? mapAccount(row) : null;

@@ -1,5 +1,7 @@
 import type { Logger } from "../shared/logger.js";
+import { createDemoProvider, DEMO_PROVIDER_NAME } from "./demo-provider.js";
 import { createLocalDevProvider, createSportsProvider as createCatalogProvider } from "./local-dev-provider.js";
+import { normalizeSportsProvider, type SportsProviderName } from "./provider-names.js";
 import {
   createSportmonksSportsProvider,
   isLiveProviderConfigured,
@@ -9,10 +11,16 @@ import {
 import type { SportsDataProvider } from "./types.js";
 
 export interface SportsRuntimeConfig {
-  /** Phase 2 catalog provider: local-dev | unset */
+  /**
+   * Authoritative selector (SPORTS_PROVIDER): demo | sportmonks | local-dev | none.
+   * Production must be demo or sportmonks — validated at config load.
+   */
+  sportsProvider: string;
+  /**
+   * Legacy catalog env (SPORTS_DATA_PROVIDER). Used only when sportsProvider is none
+   * so local developer machines keep working with SPORTS_DATA_PROVIDER=local-dev.
+   */
   dataProvider: string;
-  /** Live adapter selector: sportmonks | none/empty */
-  liveProvider: string;
   apiKey: string | null;
   apiUrl: string;
   pollIntervalMs: number;
@@ -22,46 +30,69 @@ export interface SportsRuntimeConfig {
 
 export interface SportsRuntime {
   catalogProvider: SportsDataProvider | null;
+  /** Resolved authoritative provider name. */
+  sportsProvider: SportsProviderName;
   liveProviderName: string | null;
   liveConfigured: boolean;
   liveAdapter: ReturnType<typeof createSportmonksSportsProvider> | null;
   pollIntervalMs: number;
 }
 
+function resolveCatalog(
+  provider: SportsProviderName,
+  legacyDataProvider: string,
+): SportsDataProvider | null {
+  if (provider === "demo") {
+    return createDemoProvider();
+  }
+  if (provider === "local-dev") {
+    return createLocalDevProvider();
+  }
+  if (provider === "sportmonks") {
+    // Live adapter owns fixtures; no fictional catalog overlay.
+    return null;
+  }
+  // provider === "none": legacy SPORTS_DATA_PROVIDER for local/dev/test only.
+  const legacy = (legacyDataProvider || "unset").trim().toLowerCase();
+  if (legacy === "demo") {
+    return createDemoProvider();
+  }
+  return createCatalogProvider(legacy === "" ? "unset" : legacy);
+}
+
 export function resolveSportsRuntime(config: SportsRuntimeConfig): SportsRuntime {
-  const catalogProvider = createCatalogProvider(config.dataProvider);
-  const liveName = (config.liveProvider || "none").trim().toLowerCase();
-  if (liveName === "none" || liveName === "" || liveName === "unset") {
+  const sportsProvider = normalizeSportsProvider(config.sportsProvider);
+  const catalogProvider = resolveCatalog(sportsProvider, config.dataProvider);
+
+  if (sportsProvider === "sportmonks") {
+    const liveConfigured = isLiveProviderConfigured({
+      provider: SPORTMONKS_PROVIDER_NAME,
+      apiKey: config.apiKey,
+    });
+    const liveAdapter = createSportmonksSportsProvider({
+      apiKey: liveConfigured ? config.apiKey : null,
+      apiUrl: config.apiUrl || DEFAULT_SPORTMONKS_API_URL,
+      requestTimeoutMs: config.requestTimeoutMs,
+      logger: config.logger,
+    });
     return {
       catalogProvider,
-      liveProviderName: null,
-      liveConfigured: false,
-      liveAdapter: null,
+      sportsProvider,
+      liveProviderName: SPORTMONKS_PROVIDER_NAME,
+      liveConfigured,
+      liveAdapter,
       pollIntervalMs: config.pollIntervalMs,
     };
   }
-  if (liveName !== SPORTMONKS_PROVIDER_NAME) {
-    throw new Error(
-      `Unknown SPORTS_PROVIDER "${config.liveProvider}". Allowed: sportmonks, none.`,
-    );
-  }
-  const liveConfigured = isLiveProviderConfigured({
-    provider: SPORTMONKS_PROVIDER_NAME,
-    apiKey: config.apiKey,
-  });
-  const liveAdapter = createSportmonksSportsProvider({
-    apiKey: liveConfigured ? config.apiKey : null,
-    apiUrl: config.apiUrl || DEFAULT_SPORTMONKS_API_URL,
-    requestTimeoutMs: config.requestTimeoutMs,
-    logger: config.logger,
-  });
+
   return {
     catalogProvider,
-    liveProviderName: SPORTMONKS_PROVIDER_NAME,
-    liveConfigured,
-    liveAdapter,
+    sportsProvider,
+    liveProviderName: null,
+    liveConfigured: false,
+    liveAdapter: null,
     pollIntervalMs: config.pollIntervalMs,
   };
 }
 
-export { createLocalDevProvider };
+export { createLocalDevProvider, createDemoProvider, DEMO_PROVIDER_NAME };

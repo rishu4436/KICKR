@@ -17,7 +17,7 @@ import { LiveScoringService } from "../live/service.js";
 import { filterAndRerankContestRows, rankWithinContestScope } from "../live/contest-rank.js";
 import { rankFreeEntries } from "../contests/free/results.js";
 import { buildShareCard, renderShareHtmlPage } from "../profile/share.js";
-import { renderSharePreviewPng } from "../profile/share-image.js";
+import { renderSharePreviewPng, readPngDimensions } from "../profile/share-image.js";
 import { newId } from "../shared/ids.js";
 import type { RequestContext } from "../auth/types.js";
 import type { NormalizedEventDraft } from "../sports/normalize.js";
@@ -283,11 +283,11 @@ describe("Phase 15 invite return without auto-join + onboarding view event", () 
     expect(src).toContain("Returning to confirm join");
   });
 
-  it("tracks leaderboard viewed via explicit session event, not contest lifecycle", () => {
+  it("tracks leaderboard viewed via explicit account event, not contest lifecycle", () => {
     const src = readFileSync(new URL("../app/src/main.ts", import.meta.url), "utf8");
-    expect(src).toContain("kickr.onboarding.leaderboardViewed");
     expect(src).toContain("markLeaderboardViewed");
-    expect(src).toContain("leaderboardReady = leaderboardViewed()");
+    expect(src).toContain("/me/onboarding");
+    expect(src).not.toContain("kickr.onboarding.leaderboardViewed");
     expect(src).not.toMatch(/leaderboardReady\s*=\s*[\s\S]*lifecycleBucket === "live"/);
   });
 
@@ -330,8 +330,9 @@ describe("Phase 15 share preview PNG", () => {
       score: 12.5,
     });
     expect(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
+    expect(readPngDimensions(png)).toEqual({ width: 1200, height: 630 });
     expect(png.length).toBeGreaterThan(200);
-    expect(png.length).toBeLessThan(80_000);
+    expect(png.length).toBeLessThan(400_000);
 
     const again = renderSharePreviewPng({
       kind: "FREE_CONTEST",

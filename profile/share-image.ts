@@ -1,6 +1,6 @@
 /**
  * Deterministic social preview PNG for FREE contest/league share pages.
- * No monetary/prize language. Pure Node (zlib) — no sharp/canvas deps.
+ * Proper 1200×630 OG card. No monetary/prize language. Pure Node (zlib).
  */
 import { deflateSync } from "node:zlib";
 
@@ -13,8 +13,11 @@ export interface ShareImageInput {
   score: number | null;
 }
 
-const W = 600;
-const H = 315;
+/** Standard Open Graph dimensions. */
+export const OG_WIDTH = 1200;
+export const OG_HEIGHT = 630;
+const W = OG_WIDTH;
+const H = OG_HEIGHT;
 
 /** 5x7 uppercase glyph bitmaps (MSB left). Space + A-Z + 0-9 + # . - : */
 const GLYPHS: Record<string, number[]> = {
@@ -145,28 +148,28 @@ function fillRect(
   }
 }
 
-/** Build a small deterministic PNG buffer for og:image. */
+/** Build a 1200×630 deterministic PNG buffer for og:image. */
 export function renderSharePreviewPng(input: ShareImageInput): Buffer {
   const pixels = new Uint8Array(W * H * 3);
   // Background
   fillRect(pixels, 0, 0, W, H, [11, 18, 32]);
   // Card
-  fillRect(pixels, 24, 24, W - 48, H - 48, [18, 26, 43]);
+  fillRect(pixels, 48, 48, W - 96, H - 96, [18, 26, 43]);
   // Accent bar
-  fillRect(pixels, 24, 24, 8, H - 48, [94, 234, 212]);
+  fillRect(pixels, 48, 48, 14, H - 96, [94, 234, 212]);
   // FREE badge
-  fillRect(pixels, 48, 44, 72, 28, [15, 61, 52]);
-  drawText(pixels, "FREE", 58, 50, 2, [94, 234, 212], 60);
+  fillRect(pixels, 96, 88, 140, 48, [15, 61, 52]);
+  drawText(pixels, "FREE", 116, 100, 4, [94, 234, 212], 120);
 
-  drawText(pixels, "KICKR", 48, 88, 3, [232, 238, 252], 500);
-  drawText(pixels, input.matchLabel.slice(0, 42), 48, 130, 2, [232, 238, 252], 500);
-  drawText(pixels, input.label.slice(0, 40), 48, 170, 2, [147, 160, 184], 500);
+  drawText(pixels, "KICKR", 96, 168, 6, [232, 238, 252], 1000);
+  drawText(pixels, input.matchLabel.slice(0, 48), 96, 260, 4, [232, 238, 252], 1000);
+  drawText(pixels, input.label.slice(0, 44), 96, 330, 3, [147, 160, 184], 1000);
 
   const rankLabel = input.rank != null ? `#${input.rank}` : "—";
   const scoreLabel = input.score != null ? `${input.score.toFixed(1)} PTS` : "— PTS";
-  drawText(pixels, `RANK ${rankLabel}`, 48, 214, 3, [94, 234, 212], 280);
-  drawText(pixels, scoreLabel, 320, 214, 3, [232, 238, 252], 240);
-  drawText(pixels, "NO ENTRY FEE  NO MONETARY PRIZE", 48, 262, 1, [147, 160, 184], 500);
+  drawText(pixels, `RANK ${rankLabel}`, 96, 420, 5, [94, 234, 212], 520);
+  drawText(pixels, scoreLabel, 650, 420, 5, [232, 238, 252], 460);
+  drawText(pixels, "NO ENTRY FEE  NO MONETARY PRIZE", 96, 520, 2, [147, 160, 184], 1000);
 
   // PNG encode RGB
   const raw = Buffer.alloc((W * 3 + 1) * H);
@@ -190,4 +193,15 @@ export function renderSharePreviewPng(input: ShareImageInput): Buffer {
 
 export function shareOgImagePath(kind: "contest" | "league", id: string): string {
   return `/share/${kind}/${id}/og.png`;
+}
+
+/** Read IHDR width/height from a PNG buffer (for tests). */
+export function readPngDimensions(png: Buffer): { width: number; height: number } {
+  if (png.length < 24 || png[0] !== 137) {
+    throw new Error("not a PNG");
+  }
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
 }

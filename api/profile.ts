@@ -54,6 +54,26 @@ export function registerProfileRoutes(
     return c.json(result.body, result.status as 200);
   });
 
+
+  app.get("/v1/me/onboarding", async (c) => {
+    if (!deps.onboarding) throw new AppError("NOT_FOUND", 404, "Not found");
+    const principal = await authenticate(c);
+    const progress = await deps.onboarding.getProgress(principal.accountId, principal.walletAddress);
+    return c.json({ onboarding: progress });
+  });
+
+  app.post("/v1/me/onboarding/leaderboard-viewed", async (c) => {
+    if (!deps.onboarding) throw new AppError("NOT_FOUND", 404, "Not found");
+    const principal = await authenticate(c);
+    await consumeLimit(deps, c, "auth-login", `${principal.accountId}:onboarding-lb`);
+    const progress = await deps.onboarding.markLeaderboardViewed(
+      principal.accountId,
+      principal.walletAddress,
+      { now: deps.clock(), correlationId: c.get("requestId") ?? null },
+    );
+    return c.json({ onboarding: progress });
+  });
+
   app.get("/contests/:id/share", async (c) => {
     const principal = await authenticate(c);
     const contestId = c.req.param("id");

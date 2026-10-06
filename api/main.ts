@@ -34,7 +34,7 @@ import { createAttestorVerifier } from "../attestation/verify.js";
 import { createSettlementAttestationGate } from "../attestation/gate.js";
 import { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 import { LeagueService, createPgLeagueStore } from "../leagues/index.js";
-import { ProfileService } from "../profile/index.js";
+import { ProfileService, OnboardingService } from "../profile/index.js";
 
 /**
  * API process entrypoint.
@@ -65,8 +65,8 @@ const auth = new AuthService(
 
 const footballStore = createPgFootballStore(db);
 const sportsRuntime = resolveSportsRuntime({
+  sportsProvider: config.server.sportsData.liveProvider,
   dataProvider: config.server.sportsData.provider,
-  liveProvider: config.server.sportsData.liveProvider,
   apiKey: config.secrets.sportsApiKey,
   apiUrl: config.secrets.sportsApiUrl,
   pollIntervalMs: config.server.sportsData.pollIntervalSeconds * 1000,
@@ -74,7 +74,8 @@ const sportsRuntime = resolveSportsRuntime({
   logger,
 });
 const sports = sportsRuntime.catalogProvider;
-if (sports?.developmentOnly) {
+// Seed fictional catalog for LOCAL_DEV (dev) and DEMO (production-demo safe).
+if (sports && (sports.developmentOnly || sports.name === "demo")) {
   await footballStore.upsertCatalog(sports.catalog());
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
@@ -100,9 +101,8 @@ const idMap = new InMemoryProviderIdMap();
 // Authoritative production mappings from Postgres. Never invents domain rows.
 const providerIdMapRepo = createPgProviderIdMapRepository(db);
 loadProviderIdMap(idMap, await providerIdMapRepo.listAll());
-if (sports?.developmentOnly) {
-  // local-dev catalog seed remains an explicit development overlay.
-  seedProviderIdMapFromCatalog(idMap, "local-dev", sports.catalog());
+if (sports && (sports.developmentOnly || sports.name === "demo")) {
+  seedProviderIdMapFromCatalog(idMap, sports.name, sports.catalog());
 }
 const live = new LiveScoringService(
   footballStore,
@@ -168,12 +168,20 @@ const attestationGate = createSettlementAttestationGate({
 const settlement = new SettlementService(createPgSettlementStore(db), attestationGate);
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
 const leagues = new LeagueService(leagueStore, football, auditStore, live);
+const accountRepo = createPgAccountRepository(db);
 const profiles = new ProfileService(
-  createPgAccountRepository(db),
+  accountRepo,
   auditStore,
   freeResults,
   contestStore,
   leagueStore,
+);
+const onboarding = new OnboardingService(
+  accountRepo,
+  auditStore,
+  football,
+  contestStore,
+  leagues,
 );
 const counters = new ReliabilityCounters();
 const app = createApp({
@@ -186,6 +194,7 @@ const app = createApp({
   contests,
   leagues,
   profiles,
+  onboarding,
   scoringActors,
   live,
   settlement,

@@ -81,8 +81,10 @@ export const envSchema = z.object({
     (value) => (value === undefined || value === "" ? 6 : value),
     z.coerce.number().int().min(0).max(9),
   ),
+  // Legacy catalog selector (local-dev | unset). Prefer SPORTS_PROVIDER.
   SPORTS_DATA_PROVIDER: stringOrDefault("unset"),
-  // Live adapter. "sportmonks" requires SPORTS_API_KEY. Never silently fakes live data.
+  // Authoritative sports mode: DEMO | SPORTMONKS | LOCAL_DEV (dev) | none.
+  // Production must set DEMO or SPORTMONKS explicitly — no silent fallback.
   SPORTS_PROVIDER: stringOrDefault("none"),
   SPORTS_API_KEY: z.preprocess(
     (value) => (value === undefined || value === "" ? null : value),
@@ -91,6 +93,15 @@ export const envSchema = z.object({
   SPORTS_API_URL: stringOrDefault("https://api.sportmonks.com/v3"),
   SPORTS_POLL_INTERVAL: intOrDefault(15),
   SPORTS_REQUEST_TIMEOUT_MS: intOrDefault(8000),
+  // Explicit gate for npm run demo:seed in production-demo deployments.
+  DEMO_SEED_ENABLED: z.preprocess(
+    (value) => {
+      if (value === undefined || value === "") return false;
+      const v = String(value).trim().toLowerCase();
+      return v === "1" || v === "true" || v === "yes";
+    },
+    z.boolean(),
+  ),
   // TODO: 100 is a development default, not a confirmed production credit cap.
   FANTASY_CREDIT_CAP: intOrDefault(100),
   // Blank means the numeric per-club max is unset. Do not invent one.

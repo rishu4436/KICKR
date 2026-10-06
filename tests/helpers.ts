@@ -12,6 +12,7 @@ import { createApp, type AppDeps } from "../api/server.js";
 import { FootballService } from "../football/service.js";
 import { InMemoryFootballStore } from "../football/store.js";
 import { createLocalDevProvider } from "../sports/local-dev-provider.js";
+import { createDemoProvider } from "../sports/demo-provider.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { InMemoryContestStore } from "../contests/memory-store.js";
@@ -36,7 +37,7 @@ import { LOCAL_DEV_ATTESTOR_ID } from "../attestation/types.js";
 import type { SettlementAttestationGate } from "../attestation/gate.js";
 import type { AttestationStore } from "../attestation/types.js";
 import { InMemoryLeagueStore, LeagueService } from "../leagues/index.js";
-import { ProfileService } from "../profile/index.js";
+import { ProfileService, OnboardingService } from "../profile/index.js";
 
 export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
   const pair = nacl.sign.keyPair();
@@ -68,7 +69,9 @@ export function testConfig(overrides?: {
       usdcMint: "",
       usdcDecimals: 6,
       sportsDataProvider,
+      sportsProvider: sportsDataProvider === "local-dev" ? "local-dev" : sportsDataProvider === "demo" ? "demo" : "none",
       liveProviderConfigured: false,
+      demoData: sportsDataProvider === "demo",
     },
     server: {
       nodeEnv,
@@ -89,10 +92,11 @@ export function testConfig(overrides?: {
       },
       sportsData: {
         provider: sportsDataProvider,
-        liveProvider: "none",
+        liveProvider: sportsDataProvider === "local-dev" ? "local-dev" : sportsDataProvider === "demo" ? "demo" : "none",
         pollIntervalSeconds: 15,
         requestTimeoutMs: 8000,
         liveProviderConfigured: false,
+        demoSeedEnabled: false,
       },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },
       contests: {
@@ -115,7 +119,10 @@ export function testConfig(overrides?: {
   };
 }
 
-export function buildTestApp(clock: Clock): {
+export function buildTestApp(
+  clock: Clock,
+  overrides?: { sportsDataProvider?: string; nodeEnv?: "production" | "development" | "test" },
+): {
   app: ReturnType<typeof createApp>;
   deps: AppDeps;
   grants: InMemoryGrantRepository;
@@ -125,7 +132,7 @@ export function buildTestApp(clock: Clock): {
   localDevAttestor: ReturnType<typeof generateLocalDevAttestorKeypair>;
 } {
   const localDevAttestor = generateLocalDevAttestorKeypair();
-  const config = testConfig();
+  const config = testConfig(overrides);
   config.server.attestation.approvedAttestorsRaw = `${LOCAL_DEV_ATTESTOR_ID}:${localDevAttestor.publicKeyHex}`;
   const audit = new InMemoryAuditStore();
   const accounts = new InMemoryAccountRepository();
@@ -137,7 +144,11 @@ export function buildTestApp(clock: Clock): {
     config.server.auth,
   );
   const grants = new InMemoryGrantRepository();
-  const footballStore = new InMemoryFootballStore(createLocalDevProvider().catalog());
+  const footballStore = new InMemoryFootballStore(
+    overrides?.sportsDataProvider === "demo"
+      ? createDemoProvider().catalog()
+      : createLocalDevProvider().catalog(),
+  );
   const football = new FootballService(
     footballStore,
     audit,
@@ -175,6 +186,7 @@ export function buildTestApp(clock: Clock): {
   );
   const leagues = new LeagueService(leagueStore, football, audit, live);
   const profiles = new ProfileService(accounts, audit, freeResults, contestStore, leagueStore);
+  const onboarding = new OnboardingService(accounts, audit, football, contestStore, leagues);
   const snapshots = new InMemorySnapshotStore();
   const attestations = new InMemoryAttestationStore();
   const registry = createAttestorRegistry([
@@ -202,6 +214,7 @@ export function buildTestApp(clock: Clock): {
     contests,
     leagues,
     profiles,
+    onboarding,
     scoringActors,
     live,
     settlement,

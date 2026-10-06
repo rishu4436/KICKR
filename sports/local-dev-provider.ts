@@ -261,16 +261,15 @@ export function createLocalDevProvider(): SportsDataProvider {
 }
 
 export function createSportsProvider(name: string): SportsDataProvider | null {
-  if (name === "unset") {
+  if (name === "unset" || name === "" || name === "none") {
     return null;
   }
   if (name === "local-dev") {
     return createLocalDevProvider();
   }
-  // Production live adapter is selected via SPORTS_PROVIDER (see sports/factory.ts).
-  // Keep Phase 2 boot working for local-dev|unset only on SPORTS_DATA_PROVIDER.
+  // demo is created via sports/demo-provider (factory). Do not silent-fallback here.
   throw new Error(
-    `Unknown SPORTS_DATA_PROVIDER "${name}". Allowed: local-dev, unset. Use SPORTS_PROVIDER=sportmonks for the live adapter.`,
+    `Unknown SPORTS_DATA_PROVIDER "${name}". Allowed: local-dev, unset. For DEMO use SPORTS_PROVIDER=DEMO (see sports/factory.ts).`,
   );
 }
 

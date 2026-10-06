@@ -54,6 +54,7 @@ export const AUDIT_EVENTS = [
   "LEAGUE_JOINED",
   "LEAGUE_RESULT_FINALIZED",
   "PROFILE_UPDATED",
+  "ONBOARDING_LEADERBOARD_VIEWED",
 ] as const;
 
 export type AuditEventName = (typeof AUDIT_EVENTS)[number];

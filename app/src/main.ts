@@ -37,17 +37,9 @@ import {
 Object.assign(globalThis, { Buffer });
 
 const ONBOARD_KEY = "kickr.onboarding.seen";
-const LB_VIEWED_KEY = "kickr.onboarding.leaderboardViewed";
-/** Dismissal preference only — never used as completion source of truth. */
+/** Dismissal preference only — may remain client-side; never authoritative for progress. */
 function onboardingSeen(): boolean {
   return sessionStorage.getItem(ONBOARD_KEY) === "1";
-}
-/** Explicit client event: user opened a leaderboard view. */
-function leaderboardViewed(): boolean {
-  return sessionStorage.getItem(LB_VIEWED_KEY) === "1";
-}
-function markLeaderboardViewed(): void {
-  sessionStorage.setItem(LB_VIEWED_KEY, "1");
 }
 function dismissOnboarding(): void {
   sessionStorage.setItem(ONBOARD_KEY, "1");
@@ -59,28 +51,64 @@ function bindOnboardingDismiss(): void {
   });
 }
 
-const LEAGUE_RETURN_KEY = "kickr.league.return";
+/** Durable invite handoff via hash query — survives refresh, new tab, copied URL. */
 interface LeagueReturnContext {
   inviteCode: string;
   matchId: string;
   leagueId?: string;
+  xiSaved?: boolean;
 }
-function readLeagueReturn(): LeagueReturnContext | null {
-  try {
-    const raw = sessionStorage.getItem(LEAGUE_RETURN_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as LeagueReturnContext;
-    if (!parsed?.inviteCode || !parsed?.matchId) return null;
-    return parsed;
-  } catch {
-    return null;
+function parseHashParts(): { path: string; params: URLSearchParams; segments: string[] } {
+  const raw = (location.hash || "#/").replace(/^#/, "");
+  const q = raw.indexOf("?");
+  const path = q >= 0 ? raw.slice(0, q) : raw;
+  const query = q >= 0 ? raw.slice(q + 1) : "";
+  const segments = path.split("/").filter(Boolean);
+  return { path: path.startsWith("/") ? path : `/${path}`, params: new URLSearchParams(query), segments };
+}
+function hashWithQuery(path: string, params: Record<string, string | undefined>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== "") sp.set(k, v);
   }
+  const q = sp.toString();
+  const base = path.startsWith("#") ? path : `#${path.startsWith("/") ? path : `/${path}`}`;
+  return q ? `${base}?${q}` : base;
 }
-function writeLeagueReturn(ctx: LeagueReturnContext): void {
-  sessionStorage.setItem(LEAGUE_RETURN_KEY, JSON.stringify(ctx));
+function readLeagueInviteFromRoute(): LeagueReturnContext | null {
+  const { path, params, segments } = parseHashParts();
+  const inviteFromJoin = path.startsWith("/leagues/join/") ? decodeURIComponent(segments[2] ?? "") : "";
+  const inviteCode = params.get("leagueInvite") || inviteFromJoin;
+  const matchId = params.get("matchId") || "";
+  if (!inviteCode) return null;
+  return {
+    inviteCode,
+    matchId,
+    leagueId: params.get("leagueId") || undefined,
+    xiSaved: params.get("xiSaved") === "1",
+  };
 }
-function clearLeagueReturn(): void {
-  sessionStorage.removeItem(LEAGUE_RETURN_KEY);
+function xiBuilderHash(matchId: string, invite: LeagueReturnContext): string {
+  return hashWithQuery(`/matches/${matchId}/xi`, {
+    leagueInvite: invite.inviteCode,
+    matchId,
+    leagueId: invite.leagueId,
+  });
+}
+function joinConfirmHash(inviteCode: string, extra?: { matchId?: string; xiSaved?: boolean }): string {
+  return hashWithQuery(`/leagues/join/${encodeURIComponent(inviteCode)}`, {
+    matchId: extra?.matchId,
+    xiSaved: extra?.xiSaved ? "1" : undefined,
+  });
+}
+/** Persist leaderboard-viewed on the account (server), not sessionStorage. */
+async function markLeaderboardViewed(): Promise<void> {
+  if (!state.token) return;
+  try {
+    await api("/me/onboarding/leaderboard-viewed", { method: "POST", body: "{}" });
+  } catch {
+    /* non-blocking */
+  }
 }
 
 /** Onboarding completion from real account state (not sessionStorage checklist marks). */
@@ -140,11 +168,26 @@ async function loadOnboardingProgress(): Promise<{
       captainSet = true;
       viceSet = true;
     }
-    const freeJoined =
+    let freeJoined =
       mine.contests.some((c) => c.contestKind === "FREE") ||
       leagues.leagues.some((l) => l.youJoined || l.isOwner);
-    // Leaderboard step requires an explicit view event — never infer from join/live/completed.
-    const leaderboardReady = leaderboardViewed();
+    // Leaderboard step: server-persisted explicit view event (not sessionStorage).
+    let leaderboardReady = false;
+    try {
+      const ob = await api<{ onboarding: { leaderboardViewed: boolean; xiSaved: boolean; freeJoined: boolean } }>(
+        "/me/onboarding",
+      );
+      leaderboardReady = Boolean(ob.onboarding.leaderboardViewed);
+      if (ob.onboarding.xiSaved) {
+        xiSaved = true;
+        matchSelected = true;
+        captainSet = true;
+        viceSet = true;
+      }
+      if (ob.onboarding.freeJoined) freeJoined = true;
+    } catch {
+      /* fall back to derived account signals above */
+    }
     return { signedIn, matchSelected, xiSaved, captainSet, viceSet, freeJoined, leaderboardReady };
   } catch {
     return empty;
@@ -257,7 +300,9 @@ const state: {
 let devDepositKey: Keypair | null = null;
 
 function route(): string {
-  return location.hash || "#/";
+  const raw = location.hash || "#/";
+  const q = raw.indexOf("?");
+  return q >= 0 ? raw.slice(0, q) : raw;
 }
 
 function kickoffLabel(iso: string): string {
@@ -1272,11 +1317,11 @@ async function saveXi(matchId: string, existingTeamId: string | null = null): Pr
   state.teamMatchId = matchId;
   sessionStorage.setItem("kickr.dev.teamVersion", saved.version.id);
   sessionStorage.setItem("kickr.dev.teamMatch", matchId);
-  const pending = readLeagueReturn();
-  if (pending && pending.matchId === matchId) {
+  const pending = readLeagueInviteFromRoute();
+  if (pending?.inviteCode && (!pending.matchId || pending.matchId === matchId)) {
     const note = document.querySelector("#saved");
     if (note) note.textContent = `Saved XI v${saved.version.version}. Returning to confirm join…`;
-    location.hash = `#/leagues/join/${encodeURIComponent(pending.inviteCode)}`;
+    location.hash = joinConfirmHash(pending.inviteCode, { matchId, xiSaved: true });
     return;
   }
   const note = document.querySelector("#saved");
@@ -1439,18 +1484,21 @@ async function renderLeagueJoin(code: string): Promise<void> {
       <p class="quiet" id="join-note"></p>
     </article>
   `);
+  const inviteCtx: LeagueReturnContext = {
+    inviteCode: league.inviteCode,
+    matchId: league.matchId,
+    leagueId: league.id,
+  };
   document.querySelector("#build-xi-return")?.addEventListener("click", () => {
-    writeLeagueReturn({ inviteCode: league.inviteCode, matchId: league.matchId, leagueId: league.id });
-    location.hash = `#/matches/${league.matchId}/xi`;
+    location.hash = xiBuilderHash(league.matchId, inviteCtx);
   });
   document.querySelector("#confirm-join")?.addEventListener("click", () => {
     void (async () => {
       const note = document.querySelector("#join-note");
       try {
         if (!state.teamVersionId || state.teamMatchId !== league.matchId) {
-          writeLeagueReturn({ inviteCode: league.inviteCode, matchId: league.matchId, leagueId: league.id });
           if (note) note.textContent = "XI required — opening builder…";
-          location.hash = `#/matches/${league.matchId}/xi`;
+          location.hash = xiBuilderHash(league.matchId, inviteCtx);
           return;
         }
         const joined = await api<{ league: LeagueCard }>("/leagues/join", {
@@ -1458,7 +1506,6 @@ async function renderLeagueJoin(code: string): Promise<void> {
           headers: { "idempotency-key": `lgj-${Date.now()}` },
           body: JSON.stringify({ inviteCode: league.inviteCode, teamVersionId: state.teamVersionId }),
         });
-        clearLeagueReturn();
         location.hash = `#/leagues/${joined.league.id}`;
       } catch (error) {
         if (note) note.textContent = error instanceof Error ? error.message : "Join failed";
@@ -1466,8 +1513,13 @@ async function renderLeagueJoin(code: string): Promise<void> {
     })();
   });
 
-  // Returning from XI: show confirmation only — never auto-join.
-  if (!league.youJoined && hasXi && readLeagueReturn()?.inviteCode === league.inviteCode) {
+  // Returning from XI (durable query xiSaved=1 or in-session XI): confirm only — never auto-join.
+  const routeInvite = readLeagueInviteFromRoute();
+  if (
+    !league.youJoined &&
+    hasXi &&
+    (routeInvite?.xiSaved || routeInvite?.inviteCode === league.inviteCode)
+  ) {
     const note = document.querySelector("#join-note");
     if (note) note.textContent = "XI saved. Press Join League to confirm.";
   }

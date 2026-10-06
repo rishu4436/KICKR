@@ -55,6 +55,18 @@ export class InMemoryAccountRepository implements AccountRepository {
     row.updatedAt = now;
     return { ...row };
   }
+
+  async markOnboardingLeaderboardViewed(id: string, now: Date) {
+    const row = this.byId.get(id);
+    if (!row || row.deletedAt) {
+      return null;
+    }
+    if (!row.onboardingLeaderboardViewedAt) {
+      row.onboardingLeaderboardViewedAt = now;
+    }
+    row.updatedAt = now;
+    return { ...row };
+  }
 }
 
 export class InMemoryNonceRepository implements NonceRepository {

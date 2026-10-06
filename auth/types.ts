@@ -2,6 +2,8 @@ export interface AccountRecord {
   id: string;
   walletAddress: string;
   displayName: string | null;
+  /** Explicit leaderboard-viewed onboarding event (Phase 16). */
+  onboardingLeaderboardViewedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
@@ -38,6 +40,8 @@ export interface AccountRepository {
   suspend(id: string, now: Date): Promise<boolean>;
   /** Optional Phase 13 profile field. */
   updateDisplayName?(id: string, displayName: string, now: Date): Promise<AccountRecord | null>;
+  /** Phase 16: persist explicit leaderboard-viewed onboarding progress. */
+  markOnboardingLeaderboardViewed?(id: string, now: Date): Promise<AccountRecord | null>;
 }
 
 export interface NonceRepository {

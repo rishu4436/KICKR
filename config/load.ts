@@ -3,6 +3,11 @@ import {
   createAttestorRegistry,
   parseApprovedAttestors,
 } from "../attestation/registry.js";
+import {
+  isProductionSportsProvider,
+  normalizeSportsProvider,
+  type SportsProviderName,
+} from "../sports/provider-names.js";
 import { ConfigError } from "../shared/errors.js";
 import { envSchema } from "./schema.js";
 import type { AppConfig, PublicConfig } from "./types.js";
@@ -21,6 +26,18 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   }
 
   const data = parsed.data;
+  let sportsProvider: SportsProviderName;
+  try {
+    sportsProvider = normalizeSportsProvider(data.SPORTS_PROVIDER);
+  } catch (error) {
+    throw new ConfigError(error instanceof Error ? error.message : "Invalid SPORTS_PROVIDER");
+  }
+
+  // Resolve catalog name for public/config consumers.
+  const catalogName = resolveCatalogName(sportsProvider, data.SPORTS_DATA_PROVIDER);
+  const liveProviderConfigured =
+    sportsProvider === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim());
+
   const publicConfig: PublicConfig = {
     appName: "KICKR",
     environment: data.NODE_ENV,
@@ -29,14 +46,15 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     escrowProgramId: data.ESCROW_PROGRAM_ID,
     usdcMint: data.USDC_MINT,
     usdcDecimals: data.USDC_DECIMALS,
-    sportsDataProvider: data.SPORTS_DATA_PROVIDER,
-    liveProviderConfigured:
-      data.SPORTS_PROVIDER === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim()),
+    sportsDataProvider: catalogName,
+    sportsProvider,
+    liveProviderConfigured,
+    demoData: sportsProvider === "demo" || catalogName === "demo",
   };
 
   assertPublicConfigShape(publicConfig);
   if (data.NODE_ENV === "production") {
-    assertProductionConfig(env, data);
+    assertProductionConfig(env, data, sportsProvider);
   }
   const attestors = parseApprovedAttestors(data.APPROVED_ATTESTORS, data.NODE_ENV);
   assertProductionAttestorRegistry(createAttestorRegistry(attestors), data.NODE_ENV);
@@ -65,11 +83,11 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
       sportsData: {
         provider: data.SPORTS_DATA_PROVIDER,
-        liveProvider: data.SPORTS_PROVIDER,
+        liveProvider: sportsProvider,
         pollIntervalSeconds: data.SPORTS_POLL_INTERVAL,
         requestTimeoutMs: data.SPORTS_REQUEST_TIMEOUT_MS,
-        liveProviderConfigured:
-          data.SPORTS_PROVIDER === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim()),
+        liveProviderConfigured,
+        demoSeedEnabled: data.DEMO_SEED_ENABLED,
       },
       fantasy: {
         creditCap: data.FANTASY_CREDIT_CAP,
@@ -93,6 +111,17 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       sportsApiUrl: data.SPORTS_API_URL,
     },
   };
+}
+
+function resolveCatalogName(sportsProvider: SportsProviderName, legacy: string): string {
+  if (sportsProvider === "demo") return "demo";
+  if (sportsProvider === "local-dev") return "local-dev";
+  if (sportsProvider === "sportmonks") return "unset";
+  const n = (legacy || "unset").trim().toLowerCase().replace(/_/g, "-");
+  if (n === "demo") return "demo";
+  if (n === "local-dev") return "local-dev";
+  if (n === "" || n === "unset" || n === "none") return "unset";
+  return n;
 }
 
 /**
@@ -121,11 +150,12 @@ function parseOrigins(value: string): string[] {
 
 /**
  * Production refuses blank security-critical settings and development fixtures.
+ * SPORTS_PROVIDER must be DEMO or SPORTMONKS — no silent fallback to none/local-dev.
  * Development keeps defaults so local boot and unit tests still load.
  */
 function assertProductionConfig(
   env: Record<string, string | undefined>,
-  data: { 
+  data: {
     USDC_MINT: string;
     SPORTS_PROVIDER: string;
     SPORTS_DATA_PROVIDER: string;
@@ -135,6 +165,7 @@ function assertProductionConfig(
     AUTH_DOMAIN: string;
     SESSION_TTL_SECONDS: number;
   },
+  sportsProvider: SportsProviderName,
 ): void {
   const required = [
     "DATABASE_URL",
@@ -146,7 +177,6 @@ function assertProductionConfig(
     "ALLOWED_ORIGINS",
     "SESSION_TTL_SECONDS",
     "SPORTS_PROVIDER",
-    "SPORTS_DATA_PROVIDER",
   ];
   const missing = required.filter((key) => env[key] === undefined || env[key]?.trim() === "");
   if (missing.length > 0) {
@@ -161,14 +191,19 @@ function assertProductionConfig(
   if (data.SESSION_TTL_SECONDS < 60) {
     throw new ConfigError("Production SESSION_TTL_SECONDS is not a safe session lifetime");
   }
-  if (data.SPORTS_DATA_PROVIDER === "local-dev") {
-    throw new ConfigError("Production refuses SPORTS_DATA_PROVIDER=local-dev fixtures");
+
+  // Fail closed: production must explicitly choose DEMO or SPORTMONKS.
+  if (!isProductionSportsProvider(sportsProvider)) {
+    throw new ConfigError(
+      "Production SPORTS_PROVIDER must be DEMO or SPORTMONKS (no silent fallback; LOCAL_DEV and none are refused)",
+    );
   }
-  if (data.SPORTS_PROVIDER !== "none" && data.SPORTS_PROVIDER !== "sportmonks") {
-    throw new ConfigError("Production SPORTS_PROVIDER must be none or sportmonks");
+  const legacy = (data.SPORTS_DATA_PROVIDER || "").trim().toLowerCase().replace(/_/g, "-");
+  if (legacy === "local-dev" || sportsProvider === "local-dev") {
+    throw new ConfigError("Production refuses LOCAL_DEV sports provider (use SPORTS_PROVIDER=DEMO for fictional demo data)");
   }
-  if (data.SPORTS_PROVIDER === "sportmonks" && !data.SPORTS_API_KEY) {
-    throw new ConfigError("Production sportmonks requires SPORTS_API_KEY");
+  if (sportsProvider === "sportmonks" && !data.SPORTS_API_KEY) {
+    throw new ConfigError("Production SPORTMONKS requires SPORTS_API_KEY");
   }
   const origins = parseOrigins(env.ALLOWED_ORIGINS ?? "");
   if (origins.length === 0 || origins.some((origin) => origin === "*" || origin.includes("*"))) {

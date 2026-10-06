@@ -20,7 +20,9 @@ export const PUBLIC_CONFIG_KEYS = [
   "usdcMint",
   "usdcDecimals",
   "sportsDataProvider",
+  "sportsProvider",
   "liveProviderConfigured",
+  "demoData",
 ] as const;
 
 export type PublicConfigKey = (typeof PUBLIC_CONFIG_KEYS)[number];
@@ -34,9 +36,14 @@ export interface PublicConfig {
   /** Blank until a devnet mint is configured. Never the mainnet USDC mint. */
   usdcMint: string;
   usdcDecimals: number;
+  /** Resolved catalog provider name (demo | local-dev | unset). */
   sportsDataProvider: string;
+  /** Authoritative SPORTS_PROVIDER (demo | sportmonks | local-dev | none). */
+  sportsProvider: string;
   /** True only when SPORTS_PROVIDER=sportmonks and SPORTS_API_KEY is set. */
   liveProviderConfigured: boolean;
+  /** True when the active catalog is DEMO DATA (fictional, production-demo safe). */
+  demoData: boolean;
 }
 
 export interface ServerConfig {
@@ -61,11 +68,14 @@ export interface ServerConfig {
     usdcDecimals: number;
   };
   sportsData: {
+    /** Legacy/catalog selector (SPORTS_DATA_PROVIDER). */
     provider: string;
+    /** Authoritative SPORTS_PROVIDER. */
     liveProvider: string;
     pollIntervalSeconds: number;
     requestTimeoutMs: number;
     liveProviderConfigured: boolean;
+    demoSeedEnabled: boolean;
   };
   fantasy: {
     creditCap: number;

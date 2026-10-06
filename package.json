@@ -16,7 +16,9 @@
     "build": "tsc -p tsconfig.build.json && vite build",
     "db:migrate": "tsx db/migrate-cli.ts",
     "test:pg": "vitest run --config vitest.pg.config.ts",
-    "dev:e2e-free": "node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/dev-e2e-free.ts"
+    "dev:e2e-free": "node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/dev-e2e-free.ts",
+    "demo:seed": "node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/demo-seed.ts",
+    "demo:ready": "node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/demo-ready.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

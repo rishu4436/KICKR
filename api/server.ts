@@ -39,6 +39,8 @@ import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import type { LeagueService } from "../leagues/service.js";
 import type { ProfileService } from "../profile/service.js";
+import type { OnboardingService } from "../profile/onboarding.js";
+import { detectForbiddenSignerEnv, evaluateDemoReady } from "../ops/demo-ready.js";
 import { existsSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 
@@ -60,6 +62,7 @@ export interface AppDeps {
   contests: ContestService;
   leagues?: LeagueService;
   profiles?: ProfileService;
+  onboarding?: OnboardingService;
   /** Dev-only LOCAL_DEV scoring actor registry. Absent / empty in production. */
   scoringActors?: LocalDevScoringActorRegistry;
   live?: LiveScoringService;
@@ -205,6 +208,37 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
       report.ready ? 200 : 503,
     );
   });
+
+  app.get("/ready/demo", async (c) => {
+    const reportDeps = await dependencyReport(deps);
+    const forbidden = detectForbiddenSignerEnv(process.env);
+    const demoReport = evaluateDemoReady({
+      config: deps.config,
+      databaseOk: reportDeps.dependencies.database.ok,
+      redisOk: reportDeps.dependencies.redis.ok,
+      hasDevSignerEnv: forbidden.length > 0,
+      hasBackendUsdcCustody: forbidden.some((k) => k.includes("USDC") || k.includes("ESCROW")),
+      // Production wires allowPaidDevnet=false in api/main.ts.
+      paidProductionEnabled: deps.config.server.nodeEnv === "production" ? false : false,
+    });
+    return c.json(
+      {
+        ok: demoReport.ok && reportDeps.ready,
+        check: "demo-ready",
+        mode: demoReport.mode,
+        checks: demoReport.checks,
+        forbiddenSignerEnv: forbidden,
+        database: reportDeps.dependencies.database,
+        redis: reportDeps.dependencies.redis,
+        freeOnly: true,
+        paidProductionEnabled: false,
+        LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
+        demoData: deps.config.public.demoData,
+      },
+      demoReport.ok && reportDeps.ready ? 200 : 503,
+    );
+  });
+
 
   app.get("/health/dependencies", async (c) => {
     const report = await dependencyReport(deps);

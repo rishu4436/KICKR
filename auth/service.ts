@@ -230,6 +230,7 @@ export class AuthService {
       id: newId(),
       walletAddress,
       displayName: null,
+      onboardingLeaderboardViewedAt: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
