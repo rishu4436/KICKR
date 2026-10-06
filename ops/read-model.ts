@@ -9,6 +9,8 @@ import type { SnapshotStore } from "../live/snapshot.js";
 import type { Permission } from "../rbac/permissions.js";
 import { hasOpsCapability } from "../rbac/ops-capabilities.js";
 import type { SettlementService } from "../settlement/service.js";
+import type { SettlementAttestationGate } from "../attestation/gate.js";
+import type { OpsAttestationStatus } from "../attestation/types.js";
 import { AppError } from "../shared/errors.js";
 
 export interface OpsReadDeps {
@@ -19,6 +21,7 @@ export interface OpsReadDeps {
   live?: LiveScoringService;
   settlement?: SettlementService;
   snapshots?: SnapshotStore;
+  attestationGate?: SettlementAttestationGate;
   liveProviderConfigured: boolean;
   providerName: string;
   cluster: string;
@@ -88,6 +91,11 @@ function settlementView(row: {
   failureReason: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
+}, attestation?: {
+  status: OpsAttestationStatus;
+  attestationId: string | null;
+  attestorId: string | null;
+  reason: string | null;
 }) {
   const stage =
     row.status === "RESULT_CALCULATED"
@@ -112,6 +120,10 @@ function settlementView(row: {
     failureReason: row.failureReason,
     approvedBy: row.approvedBy,
     approvedAt: row.approvedAt,
+    attestationStatus: attestation?.status ?? ("Missing" as OpsAttestationStatus),
+    attestationId: attestation?.attestationId ?? null,
+    attestorId: attestation?.attestorId ?? null,
+    attestationReason: attestation?.reason ?? null,
     reconciliation:
       row.status === "SETTLEMENT_CONFIRMED"
         ? "finalized"
@@ -120,8 +132,24 @@ function settlementView(row: {
           : "not_finalized",
     runSettlement: "not_granted" as const,
     custody: "none" as const,
-    note: "Display only. RUN_SETTLEMENT is granted to nobody. This record is not a custodial USDC balance.",
+    note: "Display only. RUN_SETTLEMENT is granted to nobody. Attestation status is verifier-computed and cannot be marked valid by an operator. This record is not a custodial USDC balance.",
   };
+}
+
+async function attestationFor(
+  deps: OpsReadDeps,
+  contestId: string,
+  resultHash: string,
+) {
+  if (!deps.attestationGate) {
+    return {
+      status: "Missing" as OpsAttestationStatus,
+      attestationId: null,
+      attestorId: null,
+      reason: "gate_unavailable",
+    };
+  }
+  return deps.attestationGate.computeOpsStatus(contestId, resultHash);
 }
 
 async function settlementRows(deps: OpsReadDeps) {
@@ -384,9 +412,12 @@ export async function buildContestDetail(deps: OpsReadDeps, contestId: string) {
   const settlement = deps.settlement ? await deps.settlement.getStatus(contestId) : null;
   const summary = contestSummary(contest);
   summary.settlementStatus = settlement ? String(settlement.status) : null;
+  const attestation = settlement
+    ? await attestationFor(deps, settlement.contestId, settlement.resultHash)
+    : null;
   return {
     contest: summary,
-    settlement: settlement ? settlementView(settlement) : null,
+    settlement: settlement ? settlementView(settlement, attestation ?? undefined) : null,
     join: "not_available_in_control_center" as const,
   };
 }
@@ -448,15 +479,20 @@ export async function listOpsSettlements(deps: OpsReadDeps) {
   if (!data.settlements || !data.rows) {
     return missing("unavailable");
   }
-  return {
-    available: true as const,
-    runSettlement: "not_granted" as const,
-    settlements: data.settlements.map((row) => ({
-      ...settlementView(row),
+  const settlements = [];
+  for (const row of data.settlements) {
+    const attestation = await attestationFor(deps, row.contestId, row.resultHash);
+    settlements.push({
+      ...settlementView(row, attestation),
       claims: data.rows
         .filter((claim) => claim.settlementId === row.id)
         .map((claim) => claimView(claim.claimStatus, claim.claimSignature, claim.claimedAt, deps.cluster)),
-    })),
+    });
+  }
+  return {
+    available: true as const,
+    runSettlement: "not_granted" as const,
+    settlements,
   };
 }
 
@@ -469,8 +505,9 @@ export async function buildSettlementDetail(deps: OpsReadDeps, settlementId: str
     throw new AppError("NOT_FOUND", 404, "Not found");
   }
   const rows = await deps.settlement.getLeaderboard(settlementId);
+  const attestation = await attestationFor(deps, settlement.contestId, settlement.resultHash);
   return {
-    settlement: settlementView(settlement),
+    settlement: settlementView(settlement, attestation),
     claims: rows.map((row) => ({
       entryId: row.entryId,
       claimant: row.destinationWallet,

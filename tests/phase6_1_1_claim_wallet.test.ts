@@ -15,15 +15,17 @@ import {
   uuidToBytes,
 } from "../solana/escrow.js";
 import { decideClaim, type ClaimObservation } from "../settlement/verify.js";
-import { InMemorySettlementStore } from "../settlement/memory-store.js";
-import { SettlementService } from "../settlement/service.js";
 import {
   assertClaimPlanIntegrity,
   checkClusterMatch,
   createMockWalletAdapter,
   explorerClaimUrl,
 } from "../app/src/claim-flow.js";
-import { buildTestApp, generateWallet, signMessage } from "./helpers.js";
+import { buildTestApp, generateWallet, issueTestAttestationForSettlement, signMessage } from "./helpers.js";
+import {
+  buildLocalDevAttestationWorld,
+  issueAndStoreLocalDevAttestation,
+} from "../attestation/test-harness.js";
 
 const PROGRAM = "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN";
 const MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -59,8 +61,8 @@ function entry(entryId: string, score: number, wallet: string) {
 }
 
 async function preparedSettlement(w1: string, w2: string) {
-  const store = new InMemorySettlementStore();
-  const service = new SettlementService(store);
+  const world = buildLocalDevAttestationWorld();
+  const service = world.settlements;
   const calculated = await service.calculate({
     contestId: CONTEST,
     matchId: MATCH,
@@ -77,6 +79,13 @@ async function preparedSettlement(w1: string, w2: string) {
     nowIso: "2026-10-04T00:00:00.000Z",
   });
   await service.review(calculated.id, "reviewer", "2026-10-04T00:01:00.000Z");
+  const rowsForAttestation = await service.getLeaderboard(calculated.id);
+  await issueAndStoreLocalDevAttestation({
+    world,
+    settlement: calculated,
+    rows: rowsForAttestation,
+    nowIso: "2026-10-04T00:01:30.000Z",
+  });
   await service.approve(calculated.id, "reviewer", "2026-10-04T00:02:00.000Z");
   const prepared = await service.prepare(calculated.id, "2026-10-04T00:03:00.000Z");
   await service.markSubmitted(prepared.id, "commit-sig", "2026-10-04T00:04:00.000Z");
@@ -327,7 +336,7 @@ describe("Phase 6.1.1 claim wallet (UNIT TEST)", () => {
 describe("Phase 6.1.1 claim plan API auth (LOCAL FIXTURE)", () => {
   it("GET claim returns 403 for non-owner wallet", async () => {
     const clock = () => new Date("2026-10-04T12:00:00.000Z");
-    const { app, deps } = buildTestApp(clock);
+    const { app, deps, localDevAttestor } = buildTestApp(clock);
     // Configure mint so ClaimPlan can build
     deps.config.server.solana.usdcMint = MINT;
     deps.config.public.usdcMint = MINT;
@@ -375,6 +384,7 @@ describe("Phase 6.1.1 claim plan API auth (LOCAL FIXTURE)", () => {
       nowIso: clock().toISOString(),
     });
     await deps.settlement!.review(calc.id, "reviewer", clock().toISOString());
+    await issueTestAttestationForSettlement(deps, localDevAttestor, calc, clock().toISOString());
     await deps.settlement!.approve(calc.id, "reviewer", clock().toISOString());
     const prep = await deps.settlement!.prepare(calc.id, clock().toISOString());
     await deps.settlement!.markSubmitted(prep.id, "c-sig", clock().toISOString());

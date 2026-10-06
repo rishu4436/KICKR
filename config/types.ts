@@ -81,6 +81,10 @@ export interface ServerConfig {
     /** null: do not impose a USDC exposure cap. Integer base units when set. TODO. */
     maxExposurePerMatch: number | null;
   };
+  attestation: {
+    /** Raw APPROVED_ATTESTORS string (ID:pubkey,...). Parsed at load into the registry. */
+    approvedAttestorsRaw: string;
+  };
 }
 
 export interface SecretConfig {

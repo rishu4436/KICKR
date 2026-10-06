@@ -27,6 +27,10 @@ import { createPgSettlementStore } from "../db/settlement-repository.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import { InMemorySnapshotStore } from "../live/snapshot.js";
+import { createPgAttestationStore } from "../db/attestation-repository.js";
+import { createAttestorRegistry, parseApprovedAttestors } from "../attestation/registry.js";
+import { createAttestorVerifier } from "../attestation/verify.js";
+import { createSettlementAttestationGate } from "../attestation/gate.js";
 
 /**
  * API process entrypoint.
@@ -132,20 +136,36 @@ if (sportsRuntime.liveConfigured) {
 }
 
 const snapshots = new InMemorySnapshotStore();
-const settlement = new SettlementService(createPgSettlementStore(db));
+const attestations = createPgAttestationStore(db);
+const attestorRegistry = createAttestorRegistry(
+  parseApprovedAttestors(config.server.attestation.approvedAttestorsRaw, config.server.nodeEnv),
+);
+const attestorVerifier = createAttestorVerifier(attestorRegistry, config.server.nodeEnv);
+const auditStore = createPgAuditStore(db);
+const attestationGate = createSettlementAttestationGate({
+  store: attestations,
+  snapshots,
+  verifier: attestorVerifier,
+  registry: attestorRegistry,
+  audit: auditStore,
+  nodeEnv: config.server.nodeEnv,
+});
+const settlement = new SettlementService(createPgSettlementStore(db), attestationGate);
 const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
 const counters = new ReliabilityCounters();
 const app = createApp({
   config,
   auth,
   grants: createPgGrantRepository(db),
-  audit: createPgAuditStore(db),
+  audit: auditStore,
   football,
   contests,
   live,
   settlement,
   settlementOrchestrator,
   snapshots,
+  attestations,
+  attestationGate,
   clientDir: path.resolve(process.cwd(), "dist/client"),
   redis,
   logger,

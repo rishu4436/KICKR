@@ -4,6 +4,7 @@ import {
   createAndApproveSnapshots,
   ingestScoringEvents,
   fixtureCtx,
+  issueLocalDevAttestationForWorld,
 } from "./fixtures/phase6_1_harness.js";
 import { buildDraftSnapshot } from "../live/snapshot.js";
 import { TIE_POLICY_ID } from "../settlement/tie-policy.js";
@@ -56,6 +57,7 @@ describe("Phase 6.1 scoring → settlement E2E", () => {
     }
 
     await world.settlements.review(settlement!.id, "reviewer", fixtureCtx().now.toISOString());
+    await issueLocalDevAttestationForWorld(world, settlement!.id, fixtureCtx().now.toISOString());
     await world.settlements.approve(settlement!.id, "reviewer", fixtureCtx().now.toISOString());
     const prepared = await world.orchestrator.prepareIfReady(settlement!.id, fixtureCtx().now.toISOString());
     expect(prepared.merkleRoot).toMatch(/^[0-9a-f]{64}$/);
@@ -207,6 +209,7 @@ describe("Phase 6.1 scoring → settlement E2E", () => {
     expect(settlement.payoutPolicyType).toBe("GRAND_LEAGUE");
     expect(settlement.totalPayoutBaseUnits + settlement.feeBaseUnits).toBe(settlement.totalPotBaseUnits);
     await world.settlements.review(settlement.id, "r", fixtureCtx().now.toISOString());
+    await issueLocalDevAttestationForWorld(world, settlement.id, fixtureCtx().now.toISOString());
     await world.settlements.approve(settlement.id, "r", fixtureCtx().now.toISOString());
     const prepared = await world.orchestrator.prepareIfReady(settlement.id, fixtureCtx().now.toISOString());
     const rows = await world.settlements.getLeaderboard(settlement.id);

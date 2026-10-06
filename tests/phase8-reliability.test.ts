@@ -23,9 +23,11 @@ import { RpcUnavailable } from "../solana/chain.js";
 import { createApp } from "../api/server.js";
 import { requestHash } from "../api/guard.js";
 import { decideClaim, type ClaimObservation } from "../settlement/verify.js";
-import { InMemorySettlementStore } from "../settlement/memory-store.js";
-import { SettlementService } from "../settlement/service.js";
 import { buildTestApp, generateWallet, signMessage, testConfig } from "./helpers.js";
+import {
+  buildLocalDevAttestationWorld,
+  issueAndStoreLocalDevAttestation,
+} from "../attestation/test-harness.js";
 
 const NOW = new Date("2026-10-06T12:00:00.000Z");
 const PROGRAM = "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN";
@@ -120,8 +122,8 @@ async function loginApp(options?: {
 }
 
 async function preparedSettlement(w1: string, w2: string) {
-  const store = new InMemorySettlementStore();
-  const service = new SettlementService(store);
+  const world = buildLocalDevAttestationWorld();
+  const service = world.settlements;
   const calculated = await service.calculate({
     contestId: CONTEST,
     matchId: MATCH,
@@ -159,9 +161,16 @@ async function preparedSettlement(w1: string, w2: string) {
     nowIso: "2026-10-06T00:00:00.000Z",
   });
   await service.review(calculated.id, "reviewer", "2026-10-06T00:01:00.000Z");
+  const rowsForAttestation = await service.getLeaderboard(calculated.id);
+  await issueAndStoreLocalDevAttestation({
+    world,
+    settlement: calculated,
+    rows: rowsForAttestation,
+    nowIso: "2026-10-06T00:01:30.000Z",
+  });
   await service.approve(calculated.id, "reviewer", "2026-10-06T00:02:00.000Z");
   const prepared = await service.prepare(calculated.id, "2026-10-06T00:03:00.000Z");
-  return { store, service, prepared };
+  return { service, prepared };
 }
 
 async function xi(football: FootballService, accountId: string, now: Date) {
@@ -704,6 +713,7 @@ describe("Phase 8 reliability", () => {
         SPORTS_DATA_PROVIDER: "sportmonks",
         ALLOWED_ORIGINS: "*",
         SESSION_TTL_SECONDS: "3600",
+        APPROVED_ATTESTORS: "ORACLE_A:1111111111111111111111111111111111111111111111111111111111111111",
       }),
     ).toThrow(/ALLOWED_ORIGINS/);
 

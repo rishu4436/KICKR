@@ -12,10 +12,12 @@ import {
   loginWithBrowserWallet,
   shortWallet,
 } from "../app/src/claim-flow.js";
-import { buildTestApp, generateWallet, signMessage } from "./helpers.js";
+import { buildTestApp, generateWallet, issueTestAttestationForSettlement, signMessage } from "./helpers.js";
+import {
+  buildLocalDevAttestationWorld,
+  issueAndStoreLocalDevAttestation,
+} from "../attestation/test-harness.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { InMemorySettlementStore } from "../settlement/memory-store.js";
-import { SettlementService } from "../settlement/service.js";
 import { buildClaimPlan } from "../solana/escrow.js";
 
 const PROGRAM = "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN";
@@ -222,7 +224,7 @@ describe("Phase 6.1.2 owner-scoped my-result / claim (LOCAL FIXTURE)", () => {
 
   it("other wallet cannot fetch claim proof; owner can", async () => {
     const clock = () => new Date("2026-10-04T12:00:00.000Z");
-    const { app, deps } = buildTestApp(clock);
+    const { app, deps, localDevAttestor } = buildTestApp(clock);
     deps.config.server.solana.usdcMint = MINT;
     deps.config.public.usdcMint = MINT;
     const alice = generateWallet();
@@ -246,6 +248,7 @@ describe("Phase 6.1.2 owner-scoped my-result / claim (LOCAL FIXTURE)", () => {
       nowIso: clock().toISOString(),
     });
     await deps.settlement!.review(calc.id, "reviewer", clock().toISOString());
+    await issueTestAttestationForSettlement(deps, localDevAttestor, calc, clock().toISOString());
     await deps.settlement!.approve(calc.id, "reviewer", clock().toISOString());
     const prep = await deps.settlement!.prepare(calc.id, clock().toISOString());
     await deps.settlement!.markSubmitted(prep.id, "c-sig", clock().toISOString());
@@ -303,8 +306,8 @@ describe("Phase 6.1.2 owner-scoped my-result / claim (LOCAL FIXTURE)", () => {
 
 describe("Phase 6.1.2 settlement service replay still green (smoke)", () => {
   it("ALREADY_CLAIMED on second claim", async () => {
-    const store = new InMemorySettlementStore();
-    const service = new SettlementService(store);
+    const world = buildLocalDevAttestationWorld();
+    const service = world.settlements;
     const w1 = Keypair.generate().publicKey.toBase58();
     const w2 = Keypair.generate().publicKey.toBase58();
     const calculated = await service.calculate({
@@ -323,6 +326,13 @@ describe("Phase 6.1.2 settlement service replay still green (smoke)", () => {
       nowIso: "2026-10-04T00:00:00.000Z",
     });
     await service.review(calculated.id, "r", "2026-10-04T00:01:00.000Z");
+    const rowsForAttestation = await service.getLeaderboard(calculated.id);
+    await issueAndStoreLocalDevAttestation({
+      world,
+      settlement: calculated,
+      rows: rowsForAttestation,
+      nowIso: "2026-10-04T00:01:30.000Z",
+    });
     await service.approve(calculated.id, "r", "2026-10-04T00:02:00.000Z");
     const prepared = await service.prepare(calculated.id, "2026-10-04T00:03:00.000Z");
     await service.markClaimed(prepared.id, ENTRY_A, "sig-1", "2026-10-04T00:04:00.000Z");

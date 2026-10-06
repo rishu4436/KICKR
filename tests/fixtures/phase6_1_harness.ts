@@ -24,6 +24,13 @@ import {
 import { InMemorySettlementStore } from "../../settlement/memory-store.js";
 import { SettlementService } from "../../settlement/service.js";
 import { SettlementOrchestrator } from "../../settlement/orchestrator.js";
+import { InMemoryAttestationStore } from "../../attestation/memory-store.js";
+import { createAttestorRegistry } from "../../attestation/registry.js";
+import { createAttestorVerifier } from "../../attestation/verify.js";
+import { createSettlementAttestationGate } from "../../attestation/gate.js";
+import { generateLocalDevAttestorKeypair, issueLocalDevAttestation } from "../../attestation/local-dev.js";
+import { hashFinalizedSnapshots } from "../../attestation/canonical.js";
+import { LOCAL_DEV_ATTESTOR_ID } from "../../attestation/types.js";
 import { DEV_V1_RULESET } from "../../domain/scoring/dev-v1.js";
 import { newId } from "../../shared/ids.js";
 import type { RequestContext } from "../../auth/types.js";
@@ -93,7 +100,21 @@ export async function buildPhase61World(options?: {
   );
   const snapshots = new InMemorySnapshotStore();
   const settlementStore = new InMemorySettlementStore();
-  const settlements = new SettlementService(settlementStore);
+  const localDevAttestor = generateLocalDevAttestorKeypair();
+  const attestations = new InMemoryAttestationStore();
+  const registry = createAttestorRegistry([
+    { id: LOCAL_DEV_ATTESTOR_ID, publicKey: localDevAttestor.publicKey, localDevOnly: true },
+  ]);
+  const verifier = createAttestorVerifier(registry, "test");
+  const attestationGate = createSettlementAttestationGate({
+    store: attestations,
+    snapshots,
+    verifier,
+    registry,
+    audit,
+    nodeEnv: "test",
+  });
+  const settlements = new SettlementService(settlementStore, attestationGate);
   const orchestrator = new SettlementOrchestrator(settlements, contestStore, snapshots);
 
   const idMap = new InMemoryProviderIdMap();
@@ -233,6 +254,9 @@ export async function buildPhase61World(options?: {
     orchestrator,
     pipeline,
     audit,
+    attestations,
+    localDevAttestor,
+    attestationGate,
     goal,
     assist,
     idMap,
@@ -308,3 +332,25 @@ export async function createAndApproveSnapshots(
 }
 
 export { LOCAL_DEV_REPLAY_MATCH, DEV_V1_RULESET };
+
+export async function issueLocalDevAttestationForWorld(
+  world: Awaited<ReturnType<typeof buildPhase61World>>,
+  settlementId: string,
+  nowIso: string,
+): Promise<void> {
+  const settlement = await world.settlements.getById(settlementId);
+  if (!settlement) throw new Error("settlement missing");
+  const approved = await world.snapshots.listApprovedForContest(settlement.contestId);
+  const attestation = issueLocalDevAttestation({
+    matchId: settlement.matchId,
+    contestId: settlement.contestId,
+    scoringRulesetId: settlement.rulesetName,
+    scoringRulesetVersion: settlement.rulesetVersion,
+    finalizedSnapshotHash: hashFinalizedSnapshots(approved),
+    resultHash: settlement.resultHash,
+    issuedAt: nowIso,
+    secretKey: world.localDevAttestor.secretKey,
+    nodeEnv: "test",
+  });
+  await world.attestations.insert(attestation);
+}

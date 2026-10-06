@@ -19,6 +19,17 @@ import { InMemorySettlementStore } from "../settlement/memory-store.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import { InMemorySnapshotStore } from "../live/snapshot.js";
+import { InMemoryAttestationStore } from "../attestation/memory-store.js";
+import { createAttestorRegistry } from "../attestation/registry.js";
+import { createAttestorVerifier } from "../attestation/verify.js";
+import { createSettlementAttestationGate } from "../attestation/gate.js";
+import { generateLocalDevAttestorKeypair, issueLocalDevAttestation } from "../attestation/local-dev.js";
+import { hashFinalizedSnapshots } from "../attestation/canonical.js";
+import { seedApprovedSnapshotsForSettlement } from "../attestation/test-harness.js";
+import type { SettlementRecord } from "../settlement/types.js";
+import { LOCAL_DEV_ATTESTOR_ID } from "../attestation/types.js";
+import type { SettlementAttestationGate } from "../attestation/gate.js";
+import type { AttestationStore } from "../attestation/types.js";
 
 export function generateWallet(): { publicKey: string; secretKey: Uint8Array } {
   const pair = nacl.sign.keyPair();
@@ -81,6 +92,9 @@ export function testConfig(overrides?: {
         maxEntriesPerContest: null,
         maxExposurePerMatch: null,
       },
+      attestation: {
+        approvedAttestorsRaw: "",
+      },
     },
     secrets: {
       databaseUrl: overrides?.databaseUrl ?? "postgres://kickr:supersecretpassword@localhost:5432/kickr",
@@ -97,8 +111,13 @@ export function buildTestApp(clock: Clock): {
   deps: AppDeps;
   grants: InMemoryGrantRepository;
   audit: InMemoryAuditStore;
+  attestations: AttestationStore;
+  attestationGate: SettlementAttestationGate;
+  localDevAttestor: ReturnType<typeof generateLocalDevAttestorKeypair>;
 } {
+  const localDevAttestor = generateLocalDevAttestorKeypair();
   const config = testConfig();
+  config.server.attestation.approvedAttestorsRaw = `${LOCAL_DEV_ATTESTOR_ID}:${localDevAttestor.publicKeyHex}`;
   const audit = new InMemoryAuditStore();
   const auth = new AuthService(
     new InMemoryAccountRepository(),
@@ -123,7 +142,21 @@ export function buildTestApp(clock: Clock): {
     config.server.contests,
   );
   const snapshots = new InMemorySnapshotStore();
-  const settlement = new SettlementService(new InMemorySettlementStore());
+  const attestations = new InMemoryAttestationStore();
+  const registry = createAttestorRegistry([
+    { id: LOCAL_DEV_ATTESTOR_ID, publicKey: localDevAttestor.publicKey, localDevOnly: true },
+  ]);
+  const gateEnv = config.server.nodeEnv;
+  const verifier = createAttestorVerifier(registry, gateEnv);
+  const attestationGate = createSettlementAttestationGate({
+    store: attestations,
+    snapshots,
+    verifier,
+    registry,
+    audit,
+    nodeEnv: gateEnv,
+  });
+  const settlement = new SettlementService(new InMemorySettlementStore(), attestationGate);
   const settlementOrchestrator = new SettlementOrchestrator(settlement, contestStore, snapshots);
   const deps: AppDeps = {
     config,
@@ -135,9 +168,39 @@ export function buildTestApp(clock: Clock): {
     settlement,
     settlementOrchestrator,
     snapshots,
+    attestations,
+    attestationGate,
     redis,
     logger: silentLogger(),
     clock,
   };
-  return { app: createApp(deps), deps, grants, audit };
+  return { app: createApp(deps), deps, grants, audit, attestations, attestationGate, localDevAttestor };
+}
+
+/** Issue a LOCAL_DEV attestation bound to the test app's stores for approve/prepare. */
+export async function issueTestAttestationForSettlement(
+  deps: AppDeps,
+  localDevAttestor: ReturnType<typeof generateLocalDevAttestorKeypair>,
+  settlement: SettlementRecord,
+  nowIso: string,
+): Promise<void> {
+  if (!deps.snapshots || !deps.attestations) {
+    throw new Error("test app missing snapshots/attestations");
+  }
+  const rows = deps.settlement ? await deps.settlement.getLeaderboard(settlement.id) : [];
+  await seedApprovedSnapshotsForSettlement(deps.snapshots, settlement, rows, nowIso);
+  const approved = await deps.snapshots.listApprovedForContest(settlement.contestId);
+  const signEnv = deps.config.server.nodeEnv === "production" ? "development" : deps.config.server.nodeEnv;
+  const attestation = issueLocalDevAttestation({
+    matchId: settlement.matchId,
+    contestId: settlement.contestId,
+    scoringRulesetId: settlement.rulesetName,
+    scoringRulesetVersion: settlement.rulesetVersion,
+    finalizedSnapshotHash: hashFinalizedSnapshots(approved),
+    resultHash: settlement.resultHash,
+    issuedAt: nowIso,
+    secretKey: localDevAttestor.secretKey,
+    nodeEnv: signEnv,
+  });
+  await deps.attestations.insert(attestation);
 }

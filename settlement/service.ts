@@ -5,6 +5,7 @@ import { computeSettlementHash } from "./hash.js";
 import { buildMerkleTree, payoutLeaf, toHex32 } from "./merkle.js";
 import { computePayouts, type FrozenFeePolicy, type FrozenPayoutPolicy, type RankedEntryInput } from "./payouts.js";
 import { buildResultPayload, hashResultPayload } from "./result-payload.js";
+import type { SettlementAttestationGate } from "../attestation/gate.js";
 import type { SettlementStore } from "./memory-store.js";
 import type { SettlementRecord, SettlementResultRow } from "./types.js";
 
@@ -27,7 +28,25 @@ export interface CalculateSettlementInput {
 }
 
 export class SettlementService {
-  constructor(private readonly store: SettlementStore) {}
+  constructor(
+    private readonly store: SettlementStore,
+    private readonly attestationGate: SettlementAttestationGate | null = null,
+  ) {}
+
+  private async assertAttestation(settlement: SettlementRecord, purpose: "approve" | "prepare", nowIso: string): Promise<void> {
+    if (!this.attestationGate) {
+      throw new AppError(
+        "ATTESTATION_GATE_MISSING",
+        503,
+        "Settlement attestation gate is not configured",
+      );
+    }
+    await this.attestationGate.assertAllowsAdvancement({
+      settlement,
+      purpose,
+      now: new Date(nowIso),
+    });
+  }
 
   async calculate(input: CalculateSettlementInput): Promise<SettlementRecord> {
     if (input.matchSettlementGate !== "FINAL" && input.matchSettlementGate !== "DATA_FINALIZING") {
@@ -168,6 +187,7 @@ export class SettlementService {
 
   async approve(settlementId: string, actorId: string, nowIso: string): Promise<SettlementRecord> {
     const settlement = await this.require(settlementId);
+    await this.assertAttestation(settlement, "approve", nowIso);
     transition("SETTLEMENT", String(settlement.status), "RESULT_APPROVED");
     settlement.status = "RESULT_APPROVED";
     settlement.approvedBy = actorId;
@@ -190,6 +210,7 @@ export class SettlementService {
       // Retry uses the same commitment; do not create a second settlement.
       return settlement;
     }
+    await this.assertAttestation(settlement, "prepare", nowIso);
     transition("SETTLEMENT", String(settlement.status), "SETTLEMENT_PREPARED");
     const rows = await this.store.listRows(settlementId);
     // Only positive payouts are claimable leaves; zero-payout entries are omitted from merkle.

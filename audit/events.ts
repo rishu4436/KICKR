@@ -44,6 +44,8 @@ export const AUDIT_EVENTS = [
   "ACCOUNT_SUSPENDED",
   "SESSION_REVOKED",
   "PERMISSION_DENIED",
+  "ATTESTATION_ACCEPTED",
+  "ATTESTATION_REJECTED",
 ] as const;
 
 export type AuditEventName = (typeof AUDIT_EVENTS)[number];

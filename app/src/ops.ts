@@ -51,9 +51,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, classN
 
 function badge(text: string): HTMLElement {
   const node = el("span", text, "badge");
-  if (/FAIL|DENIED|SUSPENDED|BLOCK|STALE|unavailable/i.test(text)) node.classList.add("bad");
+  if (/FAIL|DENIED|SUSPENDED|BLOCK|STALE|Invalid|Missing|unavailable/i.test(text)) node.classList.add("bad");
   else if (/CONFIRM|PENDING|REVIEW|CALCULAT|unknown/i.test(text)) node.classList.add("warn");
-  else if (/OK|CLAIMED|ACTIVE|CONFIRMED|approved|finalized/i.test(text)) node.classList.add("ok");
+  else if (/OK|CLAIMED|ACTIVE|CONFIRMED|approved|finalized|Verified/i.test(text)) node.classList.add("ok");
   return node;
 }
 
@@ -232,11 +232,12 @@ function renderSettlements(body: Json): HTMLElement {
   const wrap = el("div");
   wrap.append(el("p", "RUN settlement authority is not granted. No payout control is shown.", "muted"));
   wrap.append(dataTable(
-    ["Settlement", "Stage", "Status", "Result hash", "Merkle", "Version", "Commitment", "Reconciliation"],
+    ["Settlement", "Stage", "Status", "Attestation", "Result hash", "Merkle", "Version", "Commitment", "Reconciliation"],
     settlements.map((row) => [
       String(row.id),
       badge(String(row.stage ?? "")),
       badge(String(row.status ?? "")),
+      badge(String(row.attestationStatus ?? "Missing")),
       String(row.resultHash ?? ""),
       String(row.merkleRoot ?? ""),
       String(row.settlementVersion ?? ""),

@@ -27,6 +27,8 @@ import type { SettlementService } from "../settlement/service.js";
 import type { ClaimObservation } from "../settlement/verify.js";
 import type { SettlementOrchestrator } from "../settlement/orchestrator.js";
 import type { SnapshotStore } from "../live/snapshot.js";
+import type { AttestationStore } from "../attestation/types.js";
+import type { SettlementAttestationGate } from "../attestation/gate.js";
 import type { ContestService } from "../contests/service.js";
 import type { FootballService } from "../football/service.js";
 import { existsSync } from "node:fs";
@@ -50,6 +52,8 @@ export interface AppDeps {
   settlement?: SettlementService;
   settlementOrchestrator?: SettlementOrchestrator;
   snapshots?: SnapshotStore;
+  attestations?: AttestationStore;
+  attestationGate?: SettlementAttestationGate;
   redis: RedisClient;
   clientDir?: string;
   logger: Logger;

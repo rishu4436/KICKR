@@ -1,3 +1,8 @@
+import {
+  assertProductionAttestorRegistry,
+  createAttestorRegistry,
+  parseApprovedAttestors,
+} from "../attestation/registry.js";
 import { ConfigError } from "../shared/errors.js";
 import { envSchema } from "./schema.js";
 import type { AppConfig, PublicConfig } from "./types.js";
@@ -33,6 +38,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   if (data.NODE_ENV === "production") {
     assertProductionConfig(env, data);
   }
+  const attestors = parseApprovedAttestors(data.APPROVED_ATTESTORS, data.NODE_ENV);
+  assertProductionAttestorRegistry(createAttestorRegistry(attestors), data.NODE_ENV);
 
   return {
     public: publicConfig,
@@ -73,6 +80,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
         maxEntriesPerMatch: data.MAX_ENTRIES_PER_MATCH,
         maxEntriesPerContest: data.MAX_ENTRIES_PER_CONTEST,
         maxExposurePerMatch: data.MAX_EXPOSURE_PER_MATCH,
+      },
+      attestation: {
+        approvedAttestorsRaw: data.APPROVED_ATTESTORS,
       },
     },
     secrets: {

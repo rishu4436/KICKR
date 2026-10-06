@@ -58,6 +58,9 @@ export function registerOpsRoutes(
   app.post("/v1/ops/settlements/:id/execute", (c) => denyFunds(deps, c, authenticate));
   app.post("/v1/ops/settlements/:id/run", (c) => denyFunds(deps, c, authenticate));
   app.post("/v1/ops/settlements/:id/settle", (c) => denyFunds(deps, c, authenticate));
+  app.post("/v1/ops/attestations/:id/mark-valid", (c) => denyFunds(deps, c, authenticate));
+  app.post("/v1/ops/attestations/:id/override", (c) => denyFunds(deps, c, authenticate));
+  app.post("/v1/ops/settlements/:id/attestation/approve", (c) => denyFunds(deps, c, authenticate));
 
   app.get("/v1/ops/session", async (c) => {
     const { principal, permissions } = await begin(deps, c, authenticate);
@@ -415,6 +418,7 @@ function reads(deps: AppDeps): OpsReadDeps {
     live: deps.live,
     settlement: deps.settlement,
     snapshots: deps.snapshots,
+    attestationGate: deps.attestationGate,
     liveProviderConfigured: deps.config.public.liveProviderConfigured,
     providerName: deps.config.server.sportsData.liveProvider,
     cluster: deps.config.public.solanaCluster,

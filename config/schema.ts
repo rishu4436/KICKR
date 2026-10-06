@@ -112,6 +112,12 @@ export const envSchema = z.object({
     (value) => (value === undefined || value === "" ? null : value),
     z.union([z.null(), z.coerce.number().int().positive()]),
   ),
+  // Phase 9: approved attestor public keys. Format ID:hexOrBs58,ID2:...
+  // LOCAL_DEV is refused in production. Empty in production fails closed at load.
+  APPROVED_ATTESTORS: z.preprocess(
+    (value) => (value === undefined || value === "" ? "" : value),
+    z.string(),
+  ),
 });
 
 export type ParsedEnv = z.infer<typeof envSchema>;

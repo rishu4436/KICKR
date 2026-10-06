@@ -2,7 +2,7 @@
   "name": "kickr",
   "version": "0.1.0",
   "private": true,
-  "description": "KICKR Phase 8: reliability and abuse resistance. No mainnet mint. RUN_SETTLEMENT is granted to nobody. Program is USDC authority.",
+  "description": "KICKR Phase 9: independent result attestation boundary. No mainnet mint. RUN_SETTLEMENT is granted to nobody. Program is USDC authority. Backend does not sign attestations in production.",
   "type": "module",
   "engines": {
     "node": ">=20"

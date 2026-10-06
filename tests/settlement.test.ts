@@ -6,6 +6,10 @@ import { computeResultHash, computeSettlementHash, canonicalJson } from "../sett
 import { buildResultPayload, hashResultPayload } from "../settlement/result-payload.js";
 import { InMemorySettlementStore } from "../settlement/memory-store.js";
 import { SettlementService } from "../settlement/service.js";
+import {
+  buildLocalDevAttestationWorld,
+  issueAndStoreLocalDevAttestation,
+} from "../attestation/test-harness.js";
 import { decideClaim, decideSettlementCommit } from "../settlement/verify.js";
 import { transition, isTransitionLegal } from "../domain/state-machine.js";
 import { ROLE_PERMISSIONS, CAPABILITY_PERMISSIONS } from "../rbac/matrix.js";
@@ -268,8 +272,8 @@ describe("Phase 6 merkle + verify", () => {
 
 describe("Phase 6 settlement service lifecycle", () => {
   it("calculate → review → approve → prepare is immutable after approval", async () => {
-    const store = new InMemorySettlementStore();
-    const service = new SettlementService(store);
+    const world = buildLocalDevAttestationWorld();
+    const service = world.settlements;
     const w1 = Keypair.generate().publicKey.toBase58();
     const w2 = Keypair.generate().publicKey.toBase58();
     const calculated = await service.calculate({
@@ -293,6 +297,13 @@ describe("Phase 6 settlement service lifecycle", () => {
     expect(calculated.status).toBe("RESULT_CALCULATED");
     expect(calculated.resultHash).toMatch(/^[0-9a-f]{64}$/);
     await service.review(calculated.id, "reviewer", "2026-10-04T00:01:00.000Z");
+    const rowsForAttestation = await service.getLeaderboard(calculated.id);
+    await issueAndStoreLocalDevAttestation({
+      world,
+      settlement: calculated,
+      rows: rowsForAttestation,
+      nowIso: "2026-10-04T00:01:30.000Z",
+    });
     const approved = await service.approve(calculated.id, "reviewer", "2026-10-04T00:02:00.000Z");
     expect(approved.status).toBe("SETTLEMENT_APPROVED");
     await expect(
@@ -376,8 +387,8 @@ describe("Phase 6 settlement service lifecycle", () => {
   });
 
   it("failed submit can retry without second settlement", async () => {
-    const store = new InMemorySettlementStore();
-    const service = new SettlementService(store);
+    const world = buildLocalDevAttestationWorld();
+    const service = world.settlements;
     const w1 = Keypair.generate().publicKey.toBase58();
     const w2 = Keypair.generate().publicKey.toBase58();
     const calculated = await service.calculate({
@@ -396,6 +407,13 @@ describe("Phase 6 settlement service lifecycle", () => {
       nowIso: "2026-10-04T00:00:00.000Z",
     });
     await service.review(calculated.id, "r", "2026-10-04T00:01:00.000Z");
+    const rowsForAttestation = await service.getLeaderboard(calculated.id);
+    await issueAndStoreLocalDevAttestation({
+      world,
+      settlement: calculated,
+      rows: rowsForAttestation,
+      nowIso: "2026-10-04T00:01:30.000Z",
+    });
     await service.approve(calculated.id, "r", "2026-10-04T00:02:00.000Z");
     const prepared = await service.prepare(calculated.id, "2026-10-04T00:03:00.000Z");
     await service.markSubmitted(prepared.id, "bad-sig", "2026-10-04T00:04:00.000Z");
