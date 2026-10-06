@@ -255,3 +255,203 @@ export function createSportsProvider(name: string): SportsDataProvider | null {
     `Unknown SPORTS_DATA_PROVIDER "${name}". Allowed: local-dev, unset. Use SPORTS_PROVIDER=sportmonks for the live adapter.`,
   );
 }
+
+/**
+ * Build a fresh LOCAL_DEV match bundle at LINEUPS_AVAILABLE with diverse events.
+ * Used by the free E2E harness so lifecycle advances forward-only (no reverse edges).
+ * Explicitly marked LOCAL_DEV — never Sportmonks.
+ */
+export function buildEphemeralLocalDevMatch(seed = Date.now()): {
+  matchId: string;
+  catalog: SportsCatalog;
+  label: string;
+} {
+  const base = buildLocalDevCatalog();
+  const hex = seed.toString(16).padStart(12, "0").slice(-12);
+  const matchId = `10000000-0000-4000-8000-${hex}`;
+  const label = `LOCAL_DEV E2E ${hex.slice(-6)}`;
+  const kickoffAt = new Date(Date.now() + 3_600_000).toISOString();
+  const match = {
+    id: matchId,
+    homeClubId: LOCAL_DEV_CLUB_A,
+    awayClubId: LOCAL_DEV_CLUB_B,
+    kickoffAt,
+    competition: "DEV Cup E2E",
+    venue: "Dev Stadium",
+    externalFixtureId: `dev-e2e-${hex}`,
+    status: "LINEUPS_AVAILABLE" as const,
+    lineupAvailable: true,
+    dataSource: {
+      provider: "local-dev",
+      label: "LOCAL_DEV ephemeral E2E match, not a live feed, not Sportmonks",
+      fetchedAt: new Date().toISOString(),
+    },
+  };
+  const players = base.players;
+  const squad = players.map((player, index) => ({
+    id: `58000000-0000-4000-8000-${hex.slice(-4)}${String(index + 1).padStart(8, "0")}`,
+    matchId,
+    playerId: player.id,
+    clubId: player.clubId,
+    fantasyPosition: player.position,
+    creditValue: creditFor(player),
+    availability: "AVAILABLE" as const,
+    startingStatus: index < 11 ? ("STARTER" as const) : ("BENCH" as const),
+    squadStatus: "INCLUDED" as const,
+    providerId: `dev-e2e-squad-${player.providerId}-${hex}`,
+    sourceVersion: `dev-e2e-${hex}`,
+    sourcedAt: match.dataSource.fetchedAt,
+  }));
+  // Start with the live wave so a later append of late events changes ranks.
+  const template = sampleEvents(LOCAL_DEV_MATCH_LIVE, "live");
+  const events = remapEventsOntoMatch(template, matchId, hex, 1);
+  return {
+    matchId,
+    label,
+    catalog: {
+      clubs: base.clubs,
+      players: base.players,
+      matches: [match],
+      squad,
+      events,
+    },
+  };
+}
+
+function remapEventsOntoMatch(
+  template: ProviderEvent[],
+  matchId: string,
+  hex: string,
+  seqOffset: number,
+): ProviderEvent[] {
+  // Use 8xxxxxxx UUID prefix so ephemeral ids never collide with static 6/7xxxxxxx catalog events.
+  return template.map((event, i) => ({
+    ...event,
+    matchId,
+    sequence: seqOffset + i,
+    eventId: `80000000-0000-4000-8000-${hex.slice(-4)}${String(seqOffset + i).padStart(8, "0")}`,
+    providerEventId: `dev-e2e-${hex}-evt-${seqOffset + i}`,
+    metadata: {
+      ...event.metadata,
+      label: "development event, not a live feed",
+      source: "local-dev",
+      notSportmonks: true,
+      ephemeralMatchId: matchId,
+    },
+  }));
+}
+
+/** Late LOCAL_DEV events for an ephemeral match — appending changes live ranks. */
+export function buildLateLocalDevEvents(matchId: string, seedHex?: string): ProviderEvent[] {
+  const hex = (seedHex ?? matchId.slice(-12)).padStart(12, "0").slice(-12);
+  const full = sampleEvents(LOCAL_DEV_MATCH_FINAL, "final");
+  const live = sampleEvents(LOCAL_DEV_MATCH_LIVE, "live");
+  const late = full.slice(live.length);
+  return remapEventsOntoMatch(late, matchId, hex, live.length + 1);
+}
+
+/**
+ * XI variant picker tuned so different captains on LOCAL_DEV scorers produce
+ * visibly distinct fantasy totals (goals / assists on A FWD2, B FWD2, A MID2).
+ */
+export function pickDiverseLocalDevXi(
+  players: Array<{ playerId: string; position: string; clubId: string; shortName?: string }>,
+  variant: number,
+): { playerIds: string[]; captainId: string; viceId: string } {
+  const home = players[0]?.clubId ?? "";
+  const away = players.find((p) => p.clubId !== home)?.clubId ?? "";
+  const byPosClub = (pos: string, clubId: string) =>
+    players.filter((p) => p.position === pos && p.clubId === clubId);
+  const take = (pos: string, clubId: string, nth: number) => {
+    const row = byPosClub(pos, clubId)[nth];
+    if (!row) throw new Error(`LOCAL_DEV pool missing ${pos} #${nth}`);
+    return row.playerId;
+  };
+  const findByShort = (prefix: string, role: string, n: number) => {
+    const hit = players.find(
+      (p) =>
+        p.position === role &&
+        (p.shortName?.startsWith(prefix) ?? false) &&
+        (p.shortName?.endsWith(String(n)) ?? false),
+    );
+    return hit?.playerId;
+  };
+  const aFwd2 = findByShort("A", "FWD", 2) ?? take("FWD", home, 1);
+  const bFwd2 = findByShort("B", "FWD", 2) ?? take("FWD", away, 1);
+  const aMid2 = findByShort("A", "MID", 2) ?? take("MID", home, 1);
+  const bMid2 = findByShort("B", "MID", 2) ?? take("MID", away, 1);
+  const aMid1 = findByShort("A", "MID", 1) ?? take("MID", home, 0);
+  const bMid1 = findByShort("B", "MID", 1) ?? take("MID", away, 0);
+
+  const cores = [
+    {
+      playerIds: [
+        take("GK", home, 0),
+        take("DEF", home, 0),
+        take("DEF", home, 1),
+        take("DEF", home, 2),
+        take("DEF", home, 3),
+        aMid1,
+        aMid2,
+        bMid1,
+        take("DEF", away, 0),
+        aFwd2,
+        bFwd2,
+      ],
+      captainId: aFwd2,
+      viceId: aMid2,
+    },
+    {
+      playerIds: [
+        take("GK", home, 0),
+        take("DEF", home, 0),
+        take("DEF", home, 1),
+        take("DEF", home, 2),
+        take("DEF", away, 1),
+        aMid1,
+        bMid2,
+        bMid1,
+        take("DEF", away, 0),
+        aFwd2,
+        bFwd2,
+      ],
+      captainId: bFwd2,
+      viceId: bMid2,
+    },
+    {
+      playerIds: [
+        take("GK", away, 0),
+        take("DEF", home, 0),
+        take("DEF", home, 1),
+        take("DEF", away, 0),
+        take("DEF", away, 1),
+        aMid2,
+        bMid1,
+        bMid2,
+        take("DEF", home, 2),
+        aFwd2,
+        take("FWD", away, 2), // FWD3 = 9cr (avoid FWD1 15cr)
+      ],
+      captainId: aMid2,
+      viceId: aFwd2,
+    },
+    {
+      playerIds: [
+        take("GK", home, 0),
+        take("DEF", home, 0),
+        take("DEF", home, 1),
+        take("DEF", home, 2),
+        take("DEF", home, 3),
+        aMid1,
+        aMid2,
+        bMid2,
+        take("DEF", away, 2),
+        take("FWD", home, 2), // FWD3 = 9cr (avoid FWD1 15cr)
+        bFwd2,
+      ],
+      captainId: bMid2,
+      viceId: bFwd2,
+    },
+  ];
+  return cores[variant % cores.length]!;
+}

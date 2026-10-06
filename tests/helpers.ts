@@ -16,6 +16,7 @@ import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { InMemoryContestStore } from "../contests/memory-store.js";
 import { InMemoryFreeResultStore } from "../contests/free/results.js";
+import { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 import { InMemorySettlementStore } from "../settlement/memory-store.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
@@ -48,8 +49,10 @@ export function testConfig(overrides?: {
   solanaRpcUrl?: string;
   nodeEnv?: "production" | "development" | "test";
   origins?: readonly string[];
+  sportsDataProvider?: string;
 }): AppConfig {
   const nodeEnv = overrides?.nodeEnv ?? "test";
+  const sportsDataProvider = overrides?.sportsDataProvider ?? "local-dev";
   return {
     public: {
       appName: "KICKR",
@@ -59,7 +62,7 @@ export function testConfig(overrides?: {
       escrowProgramId: "DpmpV74AC91sbHtjRV8VWfBjaAdM143Jub47eG5nEGQN",
       usdcMint: "",
       usdcDecimals: 6,
-      sportsDataProvider: "unset",
+      sportsDataProvider,
       liveProviderConfigured: false,
     },
     server: {
@@ -80,7 +83,7 @@ export function testConfig(overrides?: {
         usdcDecimals: 6,
       },
       sportsData: {
-        provider: "unset",
+        provider: sportsDataProvider,
         liveProvider: "none",
         pollIntervalSeconds: 15,
         requestTimeoutMs: 8000,
@@ -128,10 +131,15 @@ export function buildTestApp(clock: Clock): {
     config.server.auth,
   );
   const grants = new InMemoryGrantRepository();
+  const footballStore = new InMemoryFootballStore(createLocalDevProvider().catalog());
   const football = new FootballService(
-    new InMemoryFootballStore(createLocalDevProvider().catalog()),
+    footballStore,
     audit,
     config.server.fantasy,
+  );
+  const scoringActors = new LocalDevScoringActorRegistry(
+    { nodeEnv: config.server.nodeEnv, sportsDataProvider: config.public.sportsDataProvider },
+    audit,
   );
   const redis = new InMemoryRedis();
   const contestStore = new InMemoryContestStore();
@@ -169,7 +177,9 @@ export function buildTestApp(clock: Clock): {
     grants,
     audit,
     football,
+    footballStore,
     contests,
+    scoringActors,
     settlement,
     settlementOrchestrator,
     snapshots,

@@ -153,6 +153,10 @@ export class FootballService {
 
   async createTeam(accountId: string, matchId: string, ctx: RequestContext): Promise<FantasyTeamRecord> {
     const match = await this.requireOpenMatch(matchId);
+    const existing = await this.findTeamForAccountMatch(accountId, match.id);
+    if (existing && existing.status === "DRAFT") {
+      return existing;
+    }
     const team: FantasyTeamRecord = {
       id: newId(),
       accountId,
@@ -163,6 +167,46 @@ export class FootballService {
     };
     await this.store.createTeam(team);
     return team;
+  }
+
+  /**
+   * Latest fantasy team for this account on the match (any status), plus latest version.
+   * Used to reload a saved XI when the user returns to the builder.
+   */
+  async getMyTeamForMatch(
+    accountId: string,
+    matchId: string,
+  ): Promise<{
+    team: FantasyTeamRecord;
+    latest: FantasyTeamVersionRecord | null;
+    readOnly: boolean;
+  } | null> {
+    const match = await this.store.getMatch(matchId);
+    if (!match) {
+      return null;
+    }
+    const team = await this.findTeamForAccountMatch(accountId, matchId);
+    if (!team) {
+      return null;
+    }
+    const versions = await this.store.listVersions(team.id);
+    return {
+      team,
+      latest: versions.at(-1) ?? null,
+      readOnly: !canBuildXi(match.status, match.lineupAvailable) || team.status === "LOCKED",
+    };
+  }
+
+  private async findTeamForAccountMatch(
+    accountId: string,
+    matchId: string,
+  ): Promise<FantasyTeamRecord | null> {
+    const teams = await this.store.listTeamsByMatch(matchId);
+    const mine = teams
+      .filter((row) => row.accountId === accountId)
+      .slice()
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return mine[0] ?? null;
   }
 
   async getTeamForAccount(teamId: string, accountId: string): Promise<{

@@ -71,6 +71,19 @@ export function registerFootballRoutes(
     return c.json({ match });
   });
 
+  app.get("/matches/:id/my-team", async (c) => {
+    const principal = await authenticate(c);
+    const owned = await deps.football.getMyTeamForMatch(principal.accountId, c.req.param("id"));
+    if (!owned) {
+      return c.json({ team: null, latest: null, readOnly: false });
+    }
+    return c.json({
+      team: owned.team,
+      latest: owned.latest,
+      readOnly: owned.readOnly,
+    });
+  });
+
   app.post("/teams", async (c) => {
     const principal = await authenticate(c);
     const body = createTeamSchema.parse(await readBody(c));

@@ -23,6 +23,10 @@ import {
 import { FootballService } from "../../football/service.js";
 import { InMemoryRedis } from "../../redis/client.js";
 import { createLocalDevProvider } from "../../sports/local-dev-provider.js";
+import { InMemoryProviderIdMap, seedProviderIdMapFromCatalog } from "../../sports/id-map.js";
+import { createContestScoringSource } from "../../live/contest-scoring-source.js";
+import { LiveScoringService } from "../../live/service.js";
+import { LocalDevScoringActorRegistry } from "../../contests/free/local-dev-scoring-actor.js";
 import { createApp, type AppDeps } from "../../api/server.js";
 import { silentLogger } from "../../shared/logger.js";
 import { generateWallet, signMessage, testConfig } from "../helpers.js";
@@ -144,13 +148,32 @@ export async function buildPgApp(clock: () => Date = () => new Date("2026-10-06T
     true,
     freeResults,
   );
+  const scoringActors = new LocalDevScoringActorRegistry(
+    { nodeEnv: config.server.nodeEnv, sportsDataProvider: config.public.sportsDataProvider },
+    audit,
+  );
+  const idMap = new InMemoryProviderIdMap();
+  seedProviderIdMapFromCatalog(idMap, "local-dev", catalog);
+  const live = new LiveScoringService(
+    footballStore,
+    football,
+    idMap,
+    redis,
+    config.public.environment,
+    audit,
+    "local-dev",
+    createContestScoringSource(contestStore),
+  );
   const deps: AppDeps = {
     config,
     auth,
     grants: createPgGrantRepository(db),
     audit,
     football,
+    footballStore,
     contests,
+    scoringActors,
+    live,
     redis,
     logger: silentLogger(),
     clock,

@@ -9,3 +9,19 @@ export {
   type FreeResultRow,
   type FreeResultStore,
 } from "./results.js";
+export {
+  assertFreeDevHarnessAllowed,
+  isFreeDevHarnessAllowed,
+} from "./dev-gate.js";
+export { LocalDevScoringActorRegistry } from "./local-dev-scoring-actor.js";
+export {
+  E2E_MATCH_FORWARD_PATH,
+  advanceMatchAlongPath,
+  advanceMatchForward,
+  appendLateLocalDevEvents,
+  finalizeFreeFromLiveScores,
+  harnessAllowed,
+  rebuildLiveScores,
+  seedFreshLocalDevMatch,
+  type DevE2eDeps,
+} from "./dev-e2e-harness.js";

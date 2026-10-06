@@ -22,6 +22,9 @@ import { registerContestRoutes } from "./contests.js";
 import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
+import { registerDevE2eRoutes } from "./dev-e2e.js";
+import type { FootballStore } from "../football/store.js";
+import type { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 import type { LiveScoringService } from "../live/service.js";
 import type { SettlementService } from "../settlement/service.js";
 import type { ClaimObservation } from "../settlement/verify.js";
@@ -47,7 +50,11 @@ export interface AppDeps {
   grants: GrantRepository;
   audit: AuditStore;
   football: FootballService;
+  /** Present when Postgres-backed; required by the local-dev E2E harness. */
+  footballStore?: FootballStore;
   contests: ContestService;
+  /** Dev-only LOCAL_DEV scoring actor registry. Absent / empty in production. */
+  scoringActors?: LocalDevScoringActorRegistry;
   live?: LiveScoringService;
   settlement?: SettlementService;
   settlementOrchestrator?: SettlementOrchestrator;
@@ -293,6 +300,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     (c, permission) => requirePermission(deps, c, permission),
   );
   registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
+  registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
 
   if (deps.clientDir && existsSync(deps.clientDir)) {
     app.use("/assets/*", serveStatic({ root: deps.clientDir }));

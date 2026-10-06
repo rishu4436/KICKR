@@ -32,6 +32,7 @@ import { createPgAttestationStore } from "../db/attestation-repository.js";
 import { createAttestorRegistry, parseApprovedAttestors } from "../attestation/registry.js";
 import { createAttestorVerifier } from "../attestation/verify.js";
 import { createSettlementAttestationGate } from "../attestation/gate.js";
+import { LocalDevScoringActorRegistry } from "../contests/free/local-dev-scoring-actor.js";
 
 /**
  * API process entrypoint.
@@ -146,6 +147,13 @@ const attestorRegistry = createAttestorRegistry(
 );
 const attestorVerifier = createAttestorVerifier(attestorRegistry, config.server.nodeEnv);
 const auditStore = createPgAuditStore(db);
+const scoringActors = new LocalDevScoringActorRegistry(
+  {
+    nodeEnv: config.server.nodeEnv,
+    sportsDataProvider: config.public.sportsDataProvider,
+  },
+  auditStore,
+);
 const attestationGate = createSettlementAttestationGate({
   store: attestations,
   snapshots,
@@ -163,7 +171,9 @@ const app = createApp({
   grants: createPgGrantRepository(db),
   audit: auditStore,
   football,
+  footballStore,
   contests,
+  scoringActors,
   live,
   settlement,
   settlementOrchestrator,

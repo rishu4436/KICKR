@@ -169,7 +169,17 @@ export function registerContestRoutes(
 
   app.post("/contests/:id/free-result/finalize", async (c) => {
     const principal = await authenticate(c);
-    await authorize(c, "RUN_SCORING");
+    // RUN_SCORING (matrix) OR dedicated LOCAL_DEV scoring actor (harness-only, audited).
+    // Never RUN_SETTLEMENT. Production registry.allowed() is false so actors cannot finalize.
+    const localDev = deps.scoringActors?.isActor(principal.accountId) ?? false;
+    if (!localDev) {
+      await authorize(c, "RUN_SCORING");
+    } else if (deps.scoringActors) {
+      await deps.scoringActors.assertCanFinalize(principal.accountId, c.req.param("id"), {
+        now: deps.clock(),
+        correlationId: c.get("requestId") ?? null,
+      });
+    }
     const contestId = c.req.param("id");
     const body = (await readBody(c)) as {
       scores?: Array<{

@@ -658,6 +658,9 @@ async function renderResult(contestId: string): Promise<void> {
   try {
     const result = await api<{
       contestKind?: string;
+      contestName?: string;
+      contestType?: string;
+      templateCode?: string;
       claimUiState: string;
       rank: number | null;
       finalScoreMilliPoints: number | null;
@@ -666,27 +669,115 @@ async function renderResult(contestId: string): Promise<void> {
       claimPlan: ClaimPlan | null;
       stages: string[];
       entryId: string;
+      captainId: string | null;
+      viceId: string | null;
+      creditsUsed: number | null;
+      monetaryPrize?: boolean;
+      freeContest?: boolean;
+      match: {
+        id: string;
+        competition: string;
+        kickoffAt: string;
+        status: string;
+        home: { name: string; shortName: string };
+        away: { name: string; shortName: string };
+      } | null;
+      xiSummary: Array<{
+        playerId: string;
+        displayName: string;
+        shortName: string;
+        position: string;
+        clubName: string;
+        isCaptain: boolean;
+        isVice: boolean;
+      }>;
+      topLeaderboard: Array<{
+        entryId: string;
+        wallet: string;
+        rank: number;
+        finalScoreMilliPoints: number;
+        isYou: boolean;
+      }>;
     }>(`/contests/${contestId}/my-result`);
     const score = result.finalScoreMilliPoints == null ? "—" : (result.finalScoreMilliPoints / 1000).toFixed(1);
-    const isFree = result.contestKind === "FREE" || result.claimUiState === "final" || result.claimUiState === "pending_result" && result.prizeBaseUnits === 0 && !result.claimPlan;
+    const isFree = result.contestKind === "FREE" || result.freeContest === true || (result.prizeBaseUnits === 0 && !result.claimPlan);
+    const captain = result.xiSummary?.find((p) => p.isCaptain);
+    const vice = result.xiSummary?.find((p) => p.isVice);
+    const matchLabel = result.match
+      ? `${result.match.home.shortName} vs ${result.match.away.shortName}`
+      : "Match";
+    const contestLabel = result.contestName ?? result.templateCode ?? result.contestType ?? "Contest";
+
     let claimHtml = "";
-    if (result.contestKind === "FREE" || (result.prizeBaseUnits === 0 && result.claimPlan == null && result.claimUiState !== "claimable")) {
-      claimHtml = `<p class="quiet">FREE result — no prize claim. Rank and points only.</p>`;
+    if (isFree) {
+      claimHtml = `
+        <div class="free-banner">
+          <strong>FREE contest</strong>
+          <span>No entry fee · No monetary prize · Rank &amp; score only</span>
+        </div>`;
     } else if (result.claimUiState === "claimable" && result.claimPlan) {
       claimHtml = `<button class="primary" id="claim-btn">Claim Prize</button><p class="quiet">Paid Devnet only. Not paid until independently verified.</p>`;
     } else {
       claimHtml = `<p class="quiet">Claim state: ${escapeText(result.claimUiState)}</p>`;
     }
+
+    const xiByPos = (pos: string) =>
+      (result.xiSummary ?? [])
+        .filter((p) => p.position === pos)
+        .map((p) => {
+          const role = p.isCaptain ? "C" : p.isVice ? "VC" : "";
+          return `<div class="chip">${escapeText(p.shortName)}${role ? `<span class="role badge ${role === "C" ? "badge-c" : "badge-vc"}">${role}</span>` : ""}</div>`;
+        })
+        .join("") || `<div class="chip quiet">${pos}</div>`;
+
+    const boardHtml = (result.topLeaderboard ?? []).length
+      ? result.topLeaderboard.map((row) => {
+          const pts = (row.finalScoreMilliPoints / 1000).toFixed(1);
+          const you = row.isYou ? " you" : "";
+          const wallet = row.wallet.length > 10 ? `${row.wallet.slice(0, 4)}…${row.wallet.slice(-4)}` : row.wallet;
+          return `<div class="lb-row${you}"><span class="rank">#${row.rank}</span><span>${escapeText(wallet)}${row.isYou ? " · you" : ""}</span><strong>${pts}</strong></div>`;
+        }).join("")
+      : `<p class="quiet">Leaderboard pending finalization.</p>`;
+
     app.innerHTML = shell("Final result", `
-      <article class="card highlight">
-        <div class="meta"><span>${escapeText((result.stages ?? []).join(" → "))}</span><span class="badge ${result.contestKind === "FREE" ? "badge-free" : "badge-paid"}">${escapeText(result.contestKind ?? "RESULT")}</span></div>
-        <h2>Rank ${result.rank ?? "—"} / ${result.totalEntries}</h2>
-        <p class="quiet">Score ${score} pts</p>
+      <article class="card result-hero">
+        <div class="meta">
+          <span>${escapeText((result.stages ?? []).join(" → "))}</span>
+          <span class="badge ${isFree ? "badge-free" : "badge-paid"}">${escapeText(isFree ? "FREE" : (result.contestKind ?? "RESULT"))}</span>
+        </div>
+        <p class="quiet result-kicker">${escapeText(contestLabel)} · ${escapeText(result.contestType ?? "")}</p>
+        <h2>${escapeText(matchLabel)}</h2>
+        <p class="quiet">${result.match ? escapeText(result.match.competition) + " · " + escapeText(kickoffLabel(result.match.kickoffAt)) : ""}</p>
+        <div class="result-stats">
+          <div><span class="quiet">Final rank</span><strong>#${result.rank ?? "—"}</strong><span class="quiet">of ${result.totalEntries}</span></div>
+          <div><span class="quiet">Final score</span><strong>${score}</strong><span class="quiet">pts</span></div>
+          <div><span class="quiet">Entrants</span><strong>${result.totalEntries}</strong></div>
+        </div>
         ${claimHtml}
         <div id="claim-target"></div>
       </article>
-      <div class="row">
-        <a class="quiet" href="#/contests/${contestId}/leaderboard">Leaderboard</a>
+
+      <article class="card">
+        <div class="meta"><span>Your XI</span><span class="quiet">${result.creditsUsed != null ? `${result.creditsUsed} credits` : ""}</span></div>
+        <div class="row" style="margin:10px 0">
+          <span>Captain <strong>${escapeText(captain?.displayName ?? "—")}</strong> <span class="badge badge-c">C</span></span>
+          <span>Vice <strong>${escapeText(vice?.displayName ?? "—")}</strong> <span class="badge badge-vc">VC</span></span>
+        </div>
+        <div class="pitch result-pitch">
+          <div class="line">${xiByPos("FWD")}</div>
+          <div class="line">${xiByPos("MID")}</div>
+          <div class="line">${xiByPos("DEF")}</div>
+          <div class="line">${xiByPos("GK")}</div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="meta"><span>Top of the table</span><span class="quiet">Final</span></div>
+        <div class="leaderboard" style="margin-top:12px">${boardHtml}</div>
+      </article>
+
+      <div class="row" style="margin-top:8px">
+        <a class="quiet" href="#/contests/${contestId}/leaderboard">Full leaderboard</a>
         <a class="quiet" href="#/my-contests">My Contests</a>
       </div>
     `);
@@ -694,7 +785,6 @@ async function renderResult(contestId: string): Promise<void> {
       const target = document.querySelector("#claim-target");
       if (target) void startClaim(contestId, result.entryId, target);
     });
-    void isFree;
   } catch (error) {
     app.innerHTML = shell("Your result", empty(error instanceof Error ? error.message : "No confirmed entry yet."));
   }
@@ -750,11 +840,32 @@ async function renderBuilder(matchId: string): Promise<void> {
   const matchResp = await api<{ match: MatchCard }>(`/matches/${matchId}`);
   const playersResp = await api<{ players: PoolPlayer[] }>(`/matches/${matchId}/players`);
   const rulesResp = await api<{ creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=upcoming`);
+  const saved = await api<{
+    team: { id: string; status: string } | null;
+    latest: { id: string; version: number; playerIds: string[]; captainId: string; viceId: string; creditsUsed: number } | null;
+    readOnly: boolean;
+  }>(`/matches/${matchId}/my-team`);
   const players = playersResp.players;
   const creditCap = rulesResp.creditCap;
   const maxFromOne = rulesResp.maxPlayersFromOneTeam;
   state.creditCap = creditCap;
   state.maxPlayersFromOneTeam = maxFromOne;
+  const readOnly = saved.readOnly || !matchResp.match.canBuildXi;
+  // Reload latest saved XI when returning to this match (unless user already has an in-memory draft for it).
+  if (saved.latest && (state.teamMatchId !== matchId || state.draft.playerIds.length === 0)) {
+    state.draft.playerIds = [...saved.latest.playerIds];
+    state.draft.captainId = saved.latest.captainId;
+    state.draft.viceId = saved.latest.viceId;
+    state.teamVersionId = saved.latest.id;
+    state.teamMatchId = matchId;
+    sessionStorage.setItem("kickr.dev.teamVersion", saved.latest.id);
+    sessionStorage.setItem("kickr.dev.teamMatch", matchId);
+  } else if (state.teamMatchId !== matchId) {
+    state.draft = { playerIds: [], captainId: "", viceId: "", filter: "ALL", query: "" };
+    state.teamVersionId = null;
+    state.teamMatchId = matchId;
+  }
+  const savedTeamId = saved.team?.id ?? null;
   const byId = new Map(players.map((p) => [p.playerId, p]));
   const used = calculateCreditsUsed(state.draft.playerIds.map((id) => byId.get(id)?.credit ?? 0));
   const left = remainingCredits(used, creditCap);
@@ -806,10 +917,12 @@ async function renderBuilder(matchId: string): Promise<void> {
       </div>
       ${validation.valid ? "" : `<div class="errors">${validation.errors.map((e) => escapeText(e.message)).join(" · ")}</div>`}
       <div class="row" style="margin-top:12px">
-        <button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>
+        ${readOnly
+          ? `<span class="pill badge-paid">READ-ONLY · match locked</span>`
+          : `<button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>`}
         <button class="ghost" id="to-contests">Choose contest</button>
       </div>
-      <p class="note" id="saved"></p>
+      <p class="note" id="saved">${saved.latest && !readOnly ? `Loaded saved XI v${saved.latest.version} · ${saved.latest.creditsUsed} credits` : readOnly && saved.latest ? `Locked XI v${saved.latest.version}` : ""}</p>
     </article>
     <div class="filters">
       ${(["ALL", "GK", "DEF", "MID", "FWD"] as const).map((f) => `<button type="button" data-filter="${f}" aria-pressed="${state.draft.filter === f}">${f}</button>`).join("")}
@@ -839,48 +952,54 @@ async function renderBuilder(matchId: string): Promise<void> {
       void renderBuilder(matchId);
     });
   }
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
-    button.addEventListener("click", () => {
-      const id = button.dataset.toggle ?? "";
-      if (state.draft.playerIds.includes(id)) {
-        state.draft.playerIds = state.draft.playerIds.filter((x) => x !== id);
-        if (state.draft.captainId === id) state.draft.captainId = "";
-        if (state.draft.viceId === id) state.draft.viceId = "";
-      } else if (state.draft.playerIds.length < 11) {
-        state.draft.playerIds = [...state.draft.playerIds, id];
-      }
-      void renderBuilder(matchId);
-    });
-  }
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-cap]")) {
-    button.addEventListener("click", () => {
-      state.draft.captainId = button.dataset.cap ?? "";
-      if (state.draft.viceId === state.draft.captainId) state.draft.viceId = "";
-      void renderBuilder(matchId);
-    });
-  }
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-vice]")) {
-    button.addEventListener("click", () => {
-      state.draft.viceId = button.dataset.vice ?? "";
-      if (state.draft.captainId === state.draft.viceId) state.draft.captainId = "";
-      void renderBuilder(matchId);
+  if (!readOnly) {
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
+      button.addEventListener("click", () => {
+        const id = button.dataset.toggle ?? "";
+        if (state.draft.playerIds.includes(id)) {
+          state.draft.playerIds = state.draft.playerIds.filter((x) => x !== id);
+          if (state.draft.captainId === id) state.draft.captainId = "";
+          if (state.draft.viceId === id) state.draft.viceId = "";
+        } else if (state.draft.playerIds.length < 11) {
+          state.draft.playerIds = [...state.draft.playerIds, id];
+        }
+        void renderBuilder(matchId);
+      });
+    }
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-cap]")) {
+      button.addEventListener("click", () => {
+        state.draft.captainId = button.dataset.cap ?? "";
+        if (state.draft.viceId === state.draft.captainId) state.draft.viceId = "";
+        void renderBuilder(matchId);
+      });
+    }
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-vice]")) {
+      button.addEventListener("click", () => {
+        state.draft.viceId = button.dataset.vice ?? "";
+        if (state.draft.captainId === state.draft.viceId) state.draft.captainId = "";
+        void renderBuilder(matchId);
+      });
+    }
+    document.querySelector("#save-xi")?.addEventListener("click", () => {
+      void saveXi(matchId, savedTeamId);
     });
   }
   document.querySelector("#to-contests")?.addEventListener("click", () => {
     location.hash = `#/matches/${matchId}/contests`;
   });
-  document.querySelector("#save-xi")?.addEventListener("click", () => {
-    void saveXi(matchId);
-  });
 }
 
-async function saveXi(matchId: string): Promise<void> {
-  const created = await api<{ team: { id: string } }>("/teams", {
-    method: "POST",
-    body: JSON.stringify({ matchId }),
-  });
+async function saveXi(matchId: string, existingTeamId: string | null = null): Promise<void> {
+  let teamId = existingTeamId;
+  if (!teamId) {
+    const created = await api<{ team: { id: string } }>("/teams", {
+      method: "POST",
+      body: JSON.stringify({ matchId }),
+    });
+    teamId = created.team.id;
+  }
   const saved = await api<{ version: { id: string; version: number; playerIds: string[]; captainId: string; viceId: string } }>(
-    `/teams/${created.team.id}/versions`,
+    `/teams/${teamId}/versions`,
     {
       method: "POST",
       body: JSON.stringify({

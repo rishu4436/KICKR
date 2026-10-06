@@ -185,3 +185,38 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -0.03em; }
   .auth-label { display: none; }
   .top { gap: 8px; }
 }
+
+.result-hero h2 { margin-top: 6px; }
+.result-kicker { margin: 8px 0 0; text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+.result-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+.result-stats > div {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+.result-stats strong { font-size: 22px; letter-spacing: -0.03em; }
+.free-banner {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(94, 234, 212, 0.1);
+  border: 1px solid rgba(94, 234, 212, 0.28);
+  color: var(--free);
+}
+.free-banner span { color: var(--muted); font-size: 13px; }
+.result-pitch { min-height: 220px; }
+@media (max-width: 560px) {
+  .result-stats { grid-template-columns: 1fr; }
+  .result-stats strong { font-size: 20px; }
+}

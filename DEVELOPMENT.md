@@ -27,6 +27,7 @@ The migration runner expects the process working directory to be the repository 
 | `npm test` | Vitest unit suite. No live Postgres or Redis. Excludes `tests/pg`. |
 | `npm run test:pg` | Postgres integration suite (`tests/pg`). Uses `KICKR_TEST_DATABASE_URL` or `DATABASE_URL` rewritten to `/kickr_test`. Loud-fails if unset or pointed at primary `kickr`. |
 | `npm run dev:seed-free-ux` | Dev-only FREE UX seed against a running API. Blocked when `NODE_ENV=production`. |
+| `npm run dev:e2e-free` | Clean FREE E2E (fresh match, forward-only lifecycle, real scoring/finalize). Blocked in production. No manual DB edits. |
 | `cd escrow && anchor test --skip-deploy` | LiteSVM program tests. Not run by GitHub Actions. |
 | `npm run build` | Compile to `dist/` |
 | `npm run dev` | API via tsx |

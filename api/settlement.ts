@@ -44,27 +44,70 @@ export function registerSettlementRoutes(
     if (!contest) {
       throw new AppError("NOT_FOUND", 404, "Contest not found");
     }
-    // FREE path: score + rank only. Never claimable. Never returns claimPlan.
+    // FREE path: score + rank + XI summary. Never claimable. Never returns claimPlan.
     if (isFreeContest(contest)) {
       const freeResult = await deps.contests.getFreeResult(contestId);
       const freeRow = freeResult?.rows.find((row) => row.entryId === mine.id) ?? null;
       const totalEntries = freeResult?.rows.length ?? entries.filter((e) => e.status === "CONFIRMED").length;
       const claimUiState = deps.contests.freeResultClaimUi(Boolean(freeResult));
+      const match = await deps.football.getMatch(contest.matchId);
+      const ownedXi = await deps.football.getVersionForAccount(mine.teamVersionId, principal.accountId);
+      const pool = match ? await deps.football.getPlayerPool(contest.matchId) : null;
+      const byPlayer = new Map((pool ?? []).map((p) => [p.playerId, p]));
+      const xiSummary = ownedXi
+        ? ownedXi.version.playerIds.map((playerId) => {
+            const p = byPlayer.get(playerId);
+            return {
+              playerId,
+              displayName: p?.displayName ?? playerId.slice(0, 8),
+              shortName: p?.shortName ?? "?",
+              position: p?.position ?? "MID",
+              clubName: p?.clubName ?? "",
+              isCaptain: playerId === ownedXi.version.captainId,
+              isVice: playerId === ownedXi.version.viceId,
+            };
+          })
+        : [];
+      const topLeaderboard = (freeResult?.rows ?? []).slice(0, 10).map((row) => ({
+        entryId: row.entryId,
+        wallet: row.wallet,
+        rank: row.rank,
+        finalScoreMilliPoints: row.finalScoreMilliPoints,
+        isYou: row.entryId === mine.id,
+      }));
       return c.json({
         contestId,
         matchId: contest.matchId,
         contestKind: "FREE",
+        contestName: contest.templateCode,
+        contestType: contest.contestType,
+        templateCode: contest.templateCode,
+        match: match
+          ? {
+              id: match.id,
+              competition: match.competition,
+              kickoffAt: match.kickoffAt,
+              status: match.status,
+              home: match.home,
+              away: match.away,
+            }
+          : null,
         entryId: mine.id,
         teamVersionId: mine.teamVersionId,
-        xi: null,
-        captainId: null,
-        viceId: null,
+        xi: ownedXi?.version.playerIds ?? null,
+        xiSummary,
+        captainId: ownedXi?.version.captainId ?? null,
+        viceId: ownedXi?.version.viceId ?? null,
+        creditsUsed: ownedXi?.version.creditsUsed ?? null,
         baseScoreMilliPoints: null,
         finalScoreMilliPoints: freeRow?.finalScoreMilliPoints ?? null,
         rank: freeRow?.rank ?? null,
         totalEntries,
+        topLeaderboard,
         prizeBaseUnits: 0,
         payoutStatus: "NO_PRIZE",
+        monetaryPrize: false,
+        freeContest: true,
         settlementStatus: freeResult ? "FREE_FINAL" : null,
         resultHash: null,
         settlementHash: null,
