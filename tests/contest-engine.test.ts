@@ -205,7 +205,7 @@ describe("contest engine", () => {
     const now = new Date("2026-10-03T12:00:00.000Z");
     const { contests } = stack({ redis: down });
     const rows = await contests.listDiscoverable(LOCAL_DEV_MATCH_UPCOMING, { now, correlationId: "redis" });
-    expect(rows.map((row) => row.templateCode).sort()).toEqual(["GRAND-5", "H2H-10", "H2H-20", "H2H-5", "H2H-50", "WTA-20"]);
+    expect(rows.map((row) => row.templateCode).sort()).toEqual(["FREE-GRAND", "FREE-H2H", "GRAND-5", "H2H-10", "H2H-20", "H2H-5", "H2H-50", "WTA-20"]);
     expect(rows.find((row) => row.templateCode === "H2H-50")?.entryFeeBaseUnits).toBe(50_000_000);
     expect(rows.find((row) => row.templateCode === "GRAND-5")?.capacity).toBe(1000);
     expect(rows.find((row) => row.templateCode === "WTA-20")?.capacity).toBe(10);
@@ -331,7 +331,10 @@ describe("contest engine", () => {
     expect(actions).not.toContain("ENTRY_CONFIRMED");
     expect(() => updateAuditEvent()).toThrow(/UPDATE of audit_events is forbidden/);
     const source = readFileSync(path.resolve(process.cwd(), "contests/service.ts"), "utf8");
-    expect(source).not.toMatch(/action:\s*"ENTRY_CONFIRMED"/);
+    expect(source).toMatch(/async joinFree/);
+    // Paid reserve path must not emit ENTRY_CONFIRMED; FREE joinFree may.
+    const reserveBlock = source.slice(source.indexOf("async reserve("), source.indexOf("async joinFree("));
+    expect(reserveBlock).not.toMatch(/action:\s*"ENTRY_CONFIRMED"/);
   });
 
   it("keeps one grand league and does not calculate a WTA payout", async () => {
@@ -426,12 +429,14 @@ describe("entered contests stay visible after they close", () => {
   it("only renders Join when the contest still accepts entries", () => {
     const source = readFileSync(path.resolve(process.cwd(), "app/src/main.ts"), "utf8");
     const start = source.indexOf("async function renderContests");
-    const end = source.indexOf("function joinPanel");
+    const end = source.indexOf("async function joinContest");
     const render = source.slice(start, end);
     expect(render).toContain("contestAcceptsNewEntry(contest.status)");
     expect(render).toContain('data-join="${contest.contestId}"');
     expect(render).toContain("Closed to new entries");
-    expect(render).toContain("hydrateContestSettlements");
+    expect(render).toContain("Join FREE");
+    expect(source).toContain("badge-free");
+    expect(source).toContain("contestKind === \"FREE\"");
   });
 });
 

@@ -8,6 +8,7 @@ import { assertApproverIsNotCalculator } from "../settlement/approval-guard.js";
 import { decideClaim, decideSettlementCommit, type ClaimObservation, type SettlementCommitObservation } from "../settlement/verify.js";
 import { buildClaimPlan, type ClaimPlan } from "../solana/escrow.js";
 import { observeFinalizedClaim, RpcUnavailable } from "../solana/chain.js";
+import { isFreeContest, rejectFreeMoneyPath } from "../contests/kind.js";
 
 /**
  * Settlement APIs. Never accept an arbitrary winner wallet + amount.
@@ -33,18 +34,55 @@ export function registerSettlementRoutes(
 
   app.get("/contests/:id/my-result", async (c) => {
     const principal = await authenticate(c);
-    const service = requireSettlement(deps);
     const contestId = c.req.param("id");
     const entries = await deps.contests.listDeposits(contestId);
     const mine = entries.find((entry) => entry.wallet === principal.walletAddress && entry.status === "CONFIRMED");
     if (!mine) {
       throw new AppError("NOT_FOUND", 404, "No confirmed entry for this wallet on the contest");
     }
-    const settlement = await service.getStatus(contestId);
     const contest = await deps.contests.getContest(contestId);
     if (!contest) {
       throw new AppError("NOT_FOUND", 404, "Contest not found");
     }
+    // FREE path: score + rank only. Never claimable. Never returns claimPlan.
+    if (isFreeContest(contest)) {
+      const freeResult = await deps.contests.getFreeResult(contestId);
+      const freeRow = freeResult?.rows.find((row) => row.entryId === mine.id) ?? null;
+      const totalEntries = freeResult?.rows.length ?? entries.filter((e) => e.status === "CONFIRMED").length;
+      const claimUiState = deps.contests.freeResultClaimUi(Boolean(freeResult));
+      return c.json({
+        contestId,
+        matchId: contest.matchId,
+        contestKind: "FREE",
+        entryId: mine.id,
+        teamVersionId: mine.teamVersionId,
+        xi: null,
+        captainId: null,
+        viceId: null,
+        baseScoreMilliPoints: null,
+        finalScoreMilliPoints: freeRow?.finalScoreMilliPoints ?? null,
+        rank: freeRow?.rank ?? null,
+        totalEntries,
+        prizeBaseUnits: 0,
+        payoutStatus: "NO_PRIZE",
+        settlementStatus: freeResult ? "FREE_FINAL" : null,
+        resultHash: null,
+        settlementHash: null,
+        settlementVersion: null,
+        claimStatus: "UNCLAIMED",
+        claimUiState,
+        claimSignature: null,
+        explorerUrl: null,
+        stages: freeResult
+          ? ["MATCH FINAL", "Result Processing", "Final Rank"]
+          : ["MATCH FINAL", "Result Processing"],
+        claimPlan: null,
+        merkleRoot: null,
+        claimable: false,
+      });
+    }
+    const service = requireSettlement(deps);
+    const settlement = await service.getStatus(contestId);
     let row = null as Awaited<ReturnType<typeof service.getLeaderboard>>[number] | null;
     let claimUiState = "pending_result";
     if (settlement) {
@@ -72,6 +110,7 @@ export function registerSettlementRoutes(
     return c.json({
       contestId,
       matchId: contest.matchId,
+      contestKind: "PAID_DEVNET",
       entryId: mine.id,
       teamVersionId: mine.teamVersionId,
       xi: row?.xi ?? null,
@@ -101,6 +140,10 @@ export function registerSettlementRoutes(
     await authorize(c, "RUN_SCORING");
     const contestId = c.req.param("id");
     await consumeLimit(deps, c, "settlement", `${principal.accountId}:calculate:${contestId}`);
+    const contestForCalc = await contestOrNull(deps, contestId);
+    if (contestForCalc) {
+      rejectFreeMoneyPath(contestForCalc, "settlement-calculate");
+    }
     const result = await replayOrRun(deps, c, "settlement-calculate", { contestId, actorId: principal.accountId }, async () => {
       const orch = deps.settlementOrchestrator;
       if (!orch) {
@@ -137,6 +180,13 @@ export function registerSettlementRoutes(
     const body = (await readBoundedJson(c)) as { entryId?: string; signature?: string };
     if (!body.entryId || !body.signature) {
       throw new AppError("VALIDATION", 400, "entryId and signature required");
+    }
+    const settlementForClaim = await service.getById(settlementId);
+    if (settlementForClaim) {
+      const contestForClaimSubmit = await contestOrNull(deps, settlementForClaim.contestId);
+      if (contestForClaimSubmit) {
+        rejectFreeMoneyPath(contestForClaimSubmit, "claim-submit");
+      }
     }
     await consumeLimit(deps, c, "claim-submit", `${principal.accountId}:${settlementId}:${body.entryId}`);
     const result = await replayOrRun(
@@ -260,6 +310,10 @@ export function registerSettlementRoutes(
     if (!contestId) {
       throw new AppError("VALIDATION", 400, "contestId query required");
     }
+    const contestForClaim = await contestOrNull(deps, contestId);
+    if (contestForClaim) {
+      rejectFreeMoneyPath(contestForClaim, "claim");
+    }
     const settlement = await service.getStatus(contestId);
     if (!settlement || settlement.status !== "SETTLEMENT_CONFIRMED") {
       throw new AppError("NOT_READY", 409, "Settlement is not confirmed on-chain");
@@ -326,6 +380,14 @@ export function registerSettlementRoutes(
     const principal = await authenticate(c);
     await authorize(c, "REVIEW_RESULT");
     const settlementId = c.req.param("id");
+    const servicePre = requireSettlement(deps);
+    const preApprove = await servicePre.getById(settlementId);
+    if (preApprove) {
+      const contestForApprove = await contestOrNull(deps, preApprove.contestId);
+      if (contestForApprove) {
+        rejectFreeMoneyPath(contestForApprove, "attestation-for-settlement");
+      }
+    }
     await consumeLimit(deps, c, "settlement", `${principal.accountId}:approve:${settlementId}`);
     const result = await replayOrRun(deps, c, "settlement-approve", { settlementId, actorId: principal.accountId }, async () => {
       const service = requireSettlement(deps);
@@ -353,6 +415,13 @@ export function registerSettlementRoutes(
     const principal = await authenticate(c);
     await authorize(c, "RUN_SETTLEMENT");
     const service = requireSettlement(deps);
+    const existingPrepare = await service.getById(c.req.param("id"));
+    if (existingPrepare) {
+      const contestForPrepare = await contestOrNull(deps, existingPrepare.contestId);
+      if (contestForPrepare) {
+        rejectFreeMoneyPath(contestForPrepare, "settlement-prepare");
+      }
+    }
     const settlement = deps.settlementOrchestrator
       ? await deps.settlementOrchestrator.prepareIfReady(c.req.param("id"), deps.clock().toISOString())
       : await service.prepare(c.req.param("id"), deps.clock().toISOString());
@@ -382,6 +451,10 @@ export function registerSettlementRoutes(
     const latest = await service.getById(c.req.param("id"));
     if (!latest) {
       throw new AppError("NOT_FOUND", 404, "Settlement not found");
+    }
+    const contestForCommit = await contestOrNull(deps, latest.contestId);
+    if (contestForCommit) {
+      rejectFreeMoneyPath(contestForCommit, "settlement-commit");
     }
     if (!latest.merkleRoot) {
       throw new AppError("NOT_PREPARED", 409, "Settlement must be prepared before reconcile");
@@ -554,6 +627,18 @@ export function registerSettlementRoutes(
       explorerUrl: explorerUrl(row.claimSignature, deps.config.public.solanaCluster),
     });
   });
+}
+
+
+async function contestOrNull(deps: AppDeps, contestId: string) {
+  try {
+    return await deps.contests.getContest(contestId);
+  } catch (error) {
+    if (error instanceof AppError && error.code === "NOT_FOUND") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function requireSettlement(deps: AppDeps) {

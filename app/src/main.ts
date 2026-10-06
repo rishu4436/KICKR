@@ -1,25 +1,23 @@
 import { Buffer } from "buffer";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
-import { Connection, Keypair, type Transaction } from "@solana/web3.js";
-import { buildDepositTransaction, type DepositPlan } from "../../solana/escrow.js";
+import { Connection, Keypair } from "@solana/web3.js";
+import { buildDepositTransaction, type DepositPlan, type ClaimPlan } from "../../solana/escrow.js";
 import { assertDevCluster } from "../../solana/ids.js";
-import type { ClaimPlan } from "../../solana/escrow.js";
 import {
-  explorerClaimUrl,
   loginWithBrowserWallet,
   publicRpcForCluster,
   readBrowserWallet,
-  shortWallet,
   signAndSubmitClaim,
   assertWalletClaimInvariant,
+  shortWallet,
 } from "./claim-flow.js";
-
-Object.assign(globalThis, { Buffer });
 import { contestAcceptsNewEntry } from "../../contests/types.js";
 import { calculateCreditsUsed, remainingCredits } from "../../domain/football/credits.js";
 import { formationLabel } from "../../domain/football/presentation.js";
 import { validateFantasyTeam } from "../../domain/football/validate-team.js";
+
+Object.assign(globalThis, { Buffer });
 
 interface MatchCard {
   id: string;
@@ -44,6 +42,26 @@ interface PoolPlayer {
   availability: string;
 }
 
+interface ContestCard {
+  matchId?: string;
+  contestId: string;
+  templateId?: string;
+  templateCode: string;
+  contestType: string;
+  contestKind: "FREE" | "PAID_DEVNET";
+  entryFeeBaseUnits: number;
+  prizePoolBaseUnits?: number;
+  capacity: number;
+  filledCount: number;
+  remaining: number;
+  status: string;
+  lockTime: string;
+  estimatedPrizePoolBaseUnits: number;
+  entryId?: string;
+  teamVersionId?: string;
+  joinedAt?: string;
+}
+
 interface Draft {
   playerIds: string[];
   captainId: string;
@@ -53,9 +71,7 @@ interface Draft {
 }
 
 const root = document.querySelector("#app");
-if (!(root instanceof HTMLElement)) {
-  throw new Error("missing app root");
-}
+if (!(root instanceof HTMLElement)) throw new Error("missing app root");
 const app: HTMLElement = root;
 
 const state: {
@@ -63,24 +79,26 @@ const state: {
   authMode: "dev" | "wallet" | null;
   walletAddress: string | null;
   bucket: "upcoming" | "live" | "completed";
+  myBucket: "upcoming" | "live" | "completed";
   creditCap: number;
   maxPlayersFromOneTeam: number | null;
   draft: Draft;
   teamVersionId: string | null;
   teamMatchId: string | null;
   joinNote: string;
-  joinPhase: "RESERVING" | "AWAITING_WALLET" | "SUBMITTED" | "VERIFYING" | "CONFIRMED" | "FAILED" | "EXPIRED" | "";
+  joinPhase: string;
   depositPlan: DepositPlan | null;
   depositSignature: string | null;
   publicCluster: string;
-  publicProgramId: string;
-  publicMint: string;
-  publicDecimals: number;
+  loading: boolean;
+  error: string | null;
+  environment: string | null;
 } = {
   token: sessionStorage.getItem("kickr.session.token") ?? sessionStorage.getItem("kickr.dev.token"),
   authMode: (sessionStorage.getItem("kickr.auth.mode") as "dev" | "wallet" | null) ?? (sessionStorage.getItem("kickr.dev.token") ? "dev" : null),
   walletAddress: sessionStorage.getItem("kickr.auth.wallet"),
   bucket: "upcoming",
+  myBucket: "upcoming",
   creditCap: 100,
   maxPlayersFromOneTeam: null,
   draft: { playerIds: [], captainId: "", viceId: "", filter: "ALL", query: "" },
@@ -91,23 +109,46 @@ const state: {
   depositPlan: null,
   depositSignature: null,
   publicCluster: "devnet",
-  publicProgramId: "",
-  publicMint: "",
-  publicDecimals: 6,
+  loading: false,
+  error: null,
+  environment: null,
 };
+
+let devDepositKey: Keypair | null = null;
 
 function route(): string {
   return location.hash || "#/";
 }
 
+function escapeText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function kickoffLabel(iso: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+function formatUsdc(baseUnits: number): string {
+  const whole = Math.trunc(baseUnits / 1_000_000);
+  const fraction = Math.abs(baseUnits % 1_000_000);
+  if (fraction === 0) return String(whole);
+  return `${whole}.${String(fraction).padStart(6, "0").replace(/0+$/, "")}`;
+}
+
+function initials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("") || "FC";
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (state.token) {
-    headers.set("authorization", `Bearer ${state.token}`);
-  }
-  if (init?.body) {
-    headers.set("content-type", "application/json");
-  }
+  if (state.token) headers.set("authorization", `Bearer ${state.token}`);
+  if (init?.body) headers.set("content-type", "application/json");
   const response = await fetch(path, { ...init, headers });
   const body = (await response.json()) as T & { error?: { message: string; details?: { errors: Array<{ message: string }> } } };
   if (!response.ok) {
@@ -117,6 +158,17 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+async function runtimeEnvironment(): Promise<string> {
+  if (state.environment) return state.environment;
+  try {
+    const body = await (await fetch("/v1/config/public")).json() as { environment?: string };
+    state.environment = body.environment ?? "development";
+  } catch {
+    state.environment = "development";
+  }
+  return state.environment;
+}
+
 function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
   state.token = input.token;
   state.authMode = input.mode;
@@ -124,41 +176,15 @@ function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAd
   sessionStorage.setItem("kickr.session.token", input.token);
   sessionStorage.setItem("kickr.auth.mode", input.mode);
   sessionStorage.setItem("kickr.auth.wallet", input.walletAddress);
-  sessionStorage.removeItem("kickr.dev.depositSecret");
-  sessionStorage.removeItem("kickr.dev.depositSecretLabel");
-  if (input.mode === "dev") {
-    sessionStorage.setItem("kickr.dev.token", input.token);
-  } else {
-    sessionStorage.removeItem("kickr.dev.token");
-  }
+  if (input.mode === "dev") sessionStorage.setItem("kickr.dev.token", input.token);
+  else sessionStorage.removeItem("kickr.dev.token");
 }
 
-let devDepositKey: Keypair | null = null;
-let runtimeEnv: string | null = null;
-
-async function runtimeEnvironment(): Promise<string> {
-  if (runtimeEnv) return runtimeEnv;
-  try {
-    const response = await fetch("/v1/config/public");
-    const body = (await response.json()) as { environment?: string };
-    runtimeEnv = body.environment ?? "development";
-  } catch {
-    runtimeEnv = "development";
-  }
-  return runtimeEnv;
-}
-
-/** Development signer path — keeps nacl.sign.keyPair() for local testing only. */
 async function signInDevelopment(): Promise<void> {
-  if (await runtimeEnvironment() === "production") {
-    throw new Error("Development signer is disabled");
-  }
+  if ((await runtimeEnvironment()) === "production") throw new Error("Development signer is disabled");
   const pair = nacl.sign.keyPair();
   const walletAddress = bs58.encode(pair.publicKey);
-  const nonce = await api<{ message: string }>("/v1/auth/nonce", {
-    method: "POST",
-    body: JSON.stringify({ walletAddress }),
-  });
+  const nonce = await api<{ message: string }>("/v1/auth/nonce", { method: "POST", body: JSON.stringify({ walletAddress }) });
   const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(nonce.message), pair.secretKey));
   const session = await api<{ token: string; account: { walletAddress: string } }>("/v1/auth/login", {
     method: "POST",
@@ -167,103 +193,126 @@ async function signInDevelopment(): Promise<void> {
   persistSession({ token: session.token, mode: "dev", walletAddress: session.account.walletAddress });
 }
 
-/** Real browser wallet auth via existing /v1/auth/nonce + /v1/auth/login. */
 async function signInWithWallet(): Promise<void> {
   const wallet = readBrowserWallet();
-  if (!wallet) {
-    throw new Error("No Phantom/Solflare provider found. Install a wallet extension and try again.");
-  }
+  if (!wallet) throw new Error("No Phantom/Solflare provider found.");
   const result = await loginWithBrowserWallet({
     wallet,
     requestNonce: async (walletAddress) =>
-      api<{ message: string }>("/v1/auth/nonce", {
-        method: "POST",
-        body: JSON.stringify({ walletAddress }),
-      }),
+      api<{ message: string }>("/v1/auth/nonce", { method: "POST", body: JSON.stringify({ walletAddress }) }),
     requestLogin: async (body) =>
-      api<{ token: string; account: { walletAddress: string } }>("/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
+      api<{ token: string; account: { walletAddress: string } }>("/v1/auth/login", { method: "POST", body: JSON.stringify(body) }),
   });
   persistSession({ token: result.token, mode: "wallet", walletAddress: result.walletAddress });
 }
 
-function headerAuthLabel(): string {
-  if (!state.token) return "";
-  if (state.authMode === "wallet" && state.walletAddress) {
-    return `Wallet connected · ${shortWallet(state.walletAddress)} · Devnet`;
-  }
-  if (state.authMode === "dev") {
-    return "Development signer";
-  }
-  return "Signed in";
-}
-
 function shell(title: string, body: string): string {
+  const hash = route();
+  const auth = state.token
+    ? state.authMode === "wallet" && state.walletAddress
+      ? `Wallet · ${shortWallet(state.walletAddress)}`
+      : "Dev signer"
+    : "";
   return `<div class="shell">
-    <div class="top"><div class="brand">KICKR</div><div class="quiet">${escapeText(headerAuthLabel())}</div></div>
+    <div class="top">
+      <div class="brand">KICKR</div>
+      <div class="nav">
+        <a href="#/" ${hash === "#/" || hash.startsWith("#/matches") ? 'aria-current="page"' : ""}>Matches</a>
+        <a href="#/my-contests" ${hash.startsWith("#/my-contests") ? 'aria-current="page"' : ""}>My Contests</a>
+      </div>
+      <div class="quiet">${escapeText(auth)}</div>
+    </div>
     <h1>${title}</h1>
+    ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
     ${body}
-    <p class="note">Credits are a squad budget, not USDC. A reservation is not a seat. Entry confirmed appears only after the backend verifies a finalized deposit. Development matches are not a live feed.</p>
+    <p class="note">FREE contests need no USDC. Credits are a squad budget, not money. Paid Devnet contests stay available only in development.</p>
   </div>`;
 }
 
-function kickoffLabel(iso: string): string {
-  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+function loading(label = "Loading…"): string {
+  return `<div class="loading">${escapeText(label)}</div>`;
+}
+
+function empty(label: string): string {
+  return `<div class="empty">${escapeText(label)}</div>`;
 }
 
 async function render(): Promise<void> {
+  state.error = null;
   const hash = route();
-  if (!state.token) {
-    app.innerHTML = shell(
-      "Build an XI.",
-      `<p class="quiet">Connect Phantom/Solflare for real claims, or use a development signer for local testing.</p>
-       <div class="row">
-         <button class="primary" id="signin-wallet">Connect wallet</button>
-         ${ (await runtimeEnvironment()) === "production" ? "" : '<button class="ghost" id="signin-dev">Sign in (development)</button>' }
-       </div>
-       <p class="note" id="auth-note"></p>`,
-    );
-    document.querySelector("#signin-dev")?.addEventListener("click", () => {
-      void signInDevelopment().then(render).catch((error) => {
-        const note = document.querySelector("#auth-note");
-        if (note) note.textContent = error instanceof Error ? error.message : "Sign-in failed";
+  try {
+    if (!state.token) {
+      app.innerHTML = shell(
+        "Fantasy football, free to play.",
+        `<p class="quiet">Build an XI, join FREE contests, climb the leaderboard.</p>
+         <div class="row">
+           <button class="primary" id="signin-wallet">Connect wallet</button>
+           ${(await runtimeEnvironment()) === "production" ? "" : '<button class="ghost" id="signin-dev">Sign in (development)</button>'}
+         </div>
+         <p class="note" id="auth-note"></p>`,
+      );
+      document.querySelector("#signin-dev")?.addEventListener("click", () => {
+        void signInDevelopment().then(render).catch((error) => {
+          const note = document.querySelector("#auth-note");
+          if (note) note.textContent = error instanceof Error ? error.message : "Sign-in failed";
+        });
       });
-    });
-    document.querySelector("#signin-wallet")?.addEventListener("click", () => {
-      void signInWithWallet().then(render).catch((error) => {
-        const note = document.querySelector("#auth-note");
-        if (note) note.textContent = error instanceof Error ? error.message : "Wallet sign-in failed";
+      document.querySelector("#signin-wallet")?.addEventListener("click", () => {
+        void signInWithWallet().then(render).catch((error) => {
+          const note = document.querySelector("#auth-note");
+          if (note) note.textContent = error instanceof Error ? error.message : "Wallet sign-in failed";
+        });
       });
-    });
-    return;
+      return;
+    }
+    if (hash === "#/my-contests") {
+      await renderMyContests();
+      return;
+    }
+    if (hash.startsWith("#/contests/") && hash.endsWith("/result")) {
+      await renderResult(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/contests/") && hash.endsWith("/leaderboard")) {
+      await renderLeaderboard(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/matches/") && hash.endsWith("/xi")) {
+      await renderBuilder(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/matches/") && hash.endsWith("/contests")) {
+      await renderContests(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/matches/")) {
+      await renderDetail(hash.split("/")[2] ?? "");
+      return;
+    }
+    await renderList();
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : "Something went wrong";
+    app.innerHTML = shell("Error", empty(state.error));
   }
-  if (hash.startsWith("#/matches/") && hash.endsWith("/xi")) {
-    await renderBuilder(hash.split("/")[2] ?? "");
-    return;
-  }
-  if (hash.startsWith("#/matches/") && hash.endsWith("/contests")) {
-    await renderContests(hash.split("/")[2] ?? "");
-    return;
-  }
-  if (hash.startsWith("#/matches/")) {
-    await renderDetail(hash.split("/")[2] ?? "");
-    return;
-  }
-  await renderList();
+}
+
+function matchTile(match: MatchCard): string {
+  return `<div class="match-tile">
+    <div class="team-side"><div class="crest">${escapeText(initials(match.home.shortName))}</div><div><strong>${escapeText(match.home.shortName)}</strong><div class="quiet">${escapeText(match.home.name)}</div></div></div>
+    <div class="kickoff">${escapeText(kickoffLabel(match.kickoffAt))}<div>${escapeText(match.status.replaceAll("_", " "))}</div></div>
+    <div class="team-side away"><div class="crest">${escapeText(initials(match.away.shortName))}</div><div><strong>${escapeText(match.away.shortName)}</strong><div class="quiet">${escapeText(match.away.name)}</div></div></div>
+  </div>`;
 }
 
 async function renderList(): Promise<void> {
+  app.innerHTML = shell("Upcoming matches", loading());
   const data = await api<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=${state.bucket}`);
   state.creditCap = data.creditCap;
   state.maxPlayersFromOneTeam = data.maxPlayersFromOneTeam;
   const cards = data.matches.map((match) => `<article class="card">
-      <div class="meta"><span>${match.competition}</span><span>${match.status.replaceAll("_", " ")}</span></div>
-      <h2>${match.home.shortName} vs ${match.away.shortName}</h2>
-      <p class="quiet">${match.home.name} · ${match.away.name}<br>${kickoffLabel(match.kickoffAt)}</p>
+      <div class="meta"><span>${escapeText(match.competition)}</span><span>${match.canBuildXi ? "XI open" : "XI closed"}</span></div>
+      ${matchTile(match)}
       <div class="row">
-        <span class="quiet">${match.canBuildXi ? "XI open" : "XI closed"}</span>
         <button class="ghost" data-contests="${match.id}">Contests</button>
         <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "Live" : "Closed"}</button>
       </div>
@@ -272,7 +321,7 @@ async function renderList(): Promise<void> {
     <div class="tabs">
       ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-bucket="${bucket}" aria-pressed="${state.bucket === bucket}">${bucket}</button>`).join("")}
     </div>
-    ${cards || `<p class="quiet">No matches in this view.</p>`}
+    ${cards || empty("No matches in this view.")}
   `);
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-bucket]")) {
     button.addEventListener("click", () => {
@@ -281,571 +330,481 @@ async function renderList(): Promise<void> {
     });
   }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-contests]")) {
-    button.addEventListener("click", () => {
-      location.hash = `#/matches/${button.dataset.contests}/contests`;
-    });
+    button.addEventListener("click", () => { location.hash = `#/matches/${button.dataset.contests}/contests`; });
   }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-build]")) {
-    button.addEventListener("click", () => {
-      location.hash = `#/matches/${button.dataset.build}/xi`;
-    });
+    button.addEventListener("click", () => { location.hash = `#/matches/${button.dataset.build}/xi`; });
   }
 }
 
-
-interface ContestCard {
-  contestId: string;
-  templateCode: string;
-  contestType: string;
-  entryFeeBaseUnits: number;
-  capacity: number;
-  filledCount: number;
-  remaining: number;
-  status: string;
-  lockTime: string;
-  estimatedPrizePoolBaseUnits: number;
-  estimated: true;
-  funded: false;
-  estimateLabel: string;
-}
-
-function formatUsdc(baseUnits: number): string {
-  const whole = Math.trunc(baseUnits / 1_000_000);
-  const fraction = Math.abs(baseUnits % 1_000_000);
-  if (fraction === 0) {
-    return String(whole);
-  }
-  const digits = String(fraction).padStart(6, "0").replace(/0+$/, "");
-  return `${whole}.${digits}`;
+async function renderDetail(id: string): Promise<void> {
+  app.innerHTML = shell("Match", loading());
+  const data = await api<{ match: MatchCard }>(`/matches/${id}`);
+  const match = data.match;
+  app.innerHTML = shell(`${match.home.shortName} vs ${match.away.shortName}`, `
+    ${matchTile(match)}
+    <div class="row">
+      <a class="quiet" href="#/">← Matches</a>
+      <button class="ghost" id="to-contests">Contests</button>
+      <button class="primary" id="to-xi" ${match.canBuildXi ? "" : "disabled"}>Build XI</button>
+    </div>
+  `);
+  document.querySelector("#to-contests")?.addEventListener("click", () => { location.hash = `#/matches/${id}/contests`; });
+  document.querySelector("#to-xi")?.addEventListener("click", () => { location.hash = `#/matches/${id}/xi`; });
 }
 
 function contestTitle(card: ContestCard): string {
+  if (card.contestKind === "FREE") {
+    if (card.contestType === "HEAD_TO_HEAD") return "FREE Head to Head";
+    if (card.contestType === "GRAND_LEAGUE") return "FREE Grand League";
+    return "FREE Contest";
+  }
   const dollars = formatUsdc(card.entryFeeBaseUnits);
-  if (card.contestType === "HEAD_TO_HEAD") {
-    return `H2H $${dollars}`;
-  }
-  if (card.contestType === "GRAND_LEAGUE") {
-    return `Grand League $${dollars}`;
-  }
+  if (card.contestType === "HEAD_TO_HEAD") return `H2H $${dollars}`;
+  if (card.contestType === "GRAND_LEAGUE") return `Grand League $${dollars}`;
   return `WTA $${dollars}`;
 }
 
-async function renderContests(id: string): Promise<void> {
-  const data = await api<{ contests: ContestCard[] }>(`/matches/${id}/contests`);
+function contestBadge(card: ContestCard): string {
+  if (card.contestKind === "FREE") return `<span class="badge badge-free">FREE</span>`;
+  return `<span class="badge badge-paid">PAID DEVNET</span>`;
+}
 
-  const cards = data.contests.map((contest) => `<article class="card">
-      <div class="meta"><span>${contest.templateCode}</span><span>${contest.filledCount}/${contest.capacity}</span></div>
-      <h2>${contestTitle(contest)}</h2>
-      <p class="quiet">${formatUsdc(contest.entryFeeBaseUnits)} USDC entry · ${contest.remaining} seats left · ${contest.status.replaceAll("_", " ")}</p>
-      <p class="quiet">Estimated pool ${formatUsdc(contest.estimatedPrizePoolBaseUnits)} USDC. ${contest.estimateLabel}.</p>
-      <div class="settlement-card" data-contest-id="${contest.contestId}">
-        <p class="quiet">Stages: MATCH FINAL → Result Processing → Results Verified → Prize Committed → Claim Available</p>
-        <div class="my-result quiet">Loading your result…</div>
+async function renderContests(matchId: string): Promise<void> {
+  app.innerHTML = shell("Contests", loading());
+  const env = await runtimeEnvironment();
+  const data = await api<{ contests: ContestCard[] }>(`/matches/${matchId}/contests`);
+  const free = data.contests.filter((c) => c.contestKind === "FREE");
+  const paid = data.contests.filter((c) => c.contestKind !== "FREE");
+  const renderCard = (contest: ContestCard, disabledPaid: boolean) => {
+    const joinable = contestAcceptsNewEntry(contest.status) && !(disabledPaid && contest.contestKind !== "FREE");
+    return `<article class="card">
+      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}</div>
+      <h2>${escapeText(contestTitle(contest))}</h2>
+      <p class="quiet">${contest.filledCount}/${contest.capacity} spots · ${escapeText(contest.status.replaceAll("_", " "))}</p>
+      ${contest.contestKind === "FREE"
+        ? `<p class="quiet">No USDC entry · No monetary prize · Rank & points only</p>`
+        : `<p class="quiet">${formatUsdc(contest.entryFeeBaseUnits)} USDC entry · Devnet only${disabledPaid ? " · Disabled in production" : ""}</p>`}
+      <div class="row">
+        ${joinable
+          ? `<button class="primary" data-join="${contest.contestId}" data-kind="${contest.contestKind}">${contest.contestKind === "FREE" ? "Join FREE" : "Join (paid)"}</button>`
+          : `<p class="quiet">${disabledPaid && contest.contestKind !== "FREE" ? "Paid contests disabled" : "Closed to new entries"}</p>`}
+        <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
+        <button class="ghost" data-result="${contest.contestId}">My result</button>
       </div>
-      ${contestAcceptsNewEntry(contest.status)
-        ? `<button class="primary" data-join="${contest.contestId}">Join</button>`
-        : `<p class="quiet">Closed to new entries</p>`}
-    </article>`).join("");
+    </article>`;
+  };
+  const paidDisabled = env === "production";
   app.innerHTML = shell("Contests", `
-    <div class="row"><a class="quiet" href="#/matches/${id}">Match</a><a class="quiet" href="#/">Matches</a></div>
-    ${cards || `<p class="quiet">No open contests.</p>`}
-    ${joinPanel()}
+    <div class="row"><a class="quiet" href="#/matches/${matchId}">Match</a><a class="quiet" href="#/">Matches</a></div>
+    <h2 style="margin-top:18px">FREE to play</h2>
+    ${free.map((c) => renderCard(c, false)).join("") || empty("No FREE contests yet.")}
+    <h2 style="margin-top:24px">Paid Devnet ${paidDisabled ? "(disabled)" : "(dev only)"}</h2>
+    ${paid.map((c) => renderCard(c, paidDisabled)).join("") || empty("No paid contests.")}
+    <p class="note" id="join-note">${escapeText(state.joinNote)}</p>
   `);
-  void hydrateContestSettlements();
-
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-join]")) {
     button.addEventListener("click", () => {
-      void joinContest(id, button.dataset.join ?? "");
+      void joinContest(matchId, button.dataset.join ?? "", (button.dataset.kind as ContestCard["contestKind"]) ?? "FREE");
     });
   }
-  document.querySelector("#sign-deposit")?.addEventListener("click", () => {
-    void signDeposit(id);
-  });
-}
-
-function joinPanel(): string {
-  if (!state.joinPhase) {
-    return `<p class="note" id="join-note">${escapeText(state.joinNote)}</p>`;
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-board]")) {
+    button.addEventListener("click", () => { location.hash = `#/contests/${button.dataset.board}/leaderboard`; });
   }
-  const plan = state.depositPlan;
-  const planText = plan
-    ? `<ul class="quiet">
-        <li>Contest ${escapeText(plan.contestId)}</li>
-        <li>Fee ${formatUsdc(plan.feeBaseUnits)} USDC (${plan.feeBaseUnits} base units)</li>
-        <li>Mint ${escapeText(plan.mint)}</li>
-        <li>Team version ${escapeText(plan.teamVersionId)}</li>
-        <li>Vault ${escapeText(plan.vault)}</li>
-        <li>Network ${escapeText(plan.cluster)}</li>
-        <li>Expires ${escapeText(plan.expiresAt)}</li>
-      </ul>`
-    : `<p class="quiet">Deposit plan is unavailable until a devnet USDC mint is configured.</p>`;
-  const signature = state.depositSignature
-    ? `<p>Signature ${escapeText(state.depositSignature)}</p><p><a href="${explorerTx(state.depositSignature, state.publicCluster)}">Explorer</a></p>`
-    : "";
-  const sign = state.joinPhase === "AWAITING_WALLET"
-    ? `<button class="primary" id="sign-deposit">Sign deposit</button>`
-    : "";
-  const label = phaseLabel(state.joinPhase);
-  return `<section class="card"><h2>${escapeText(label)}</h2>${planText}<p class="note">${escapeText(state.joinNote)}</p>${signature}${sign}</section>`;
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-result]")) {
+    button.addEventListener("click", () => { location.hash = `#/contests/${button.dataset.result}/result`; });
+  }
 }
 
-function phaseLabel(phase: typeof state.joinPhase): string {
-  if (phase === "RESERVING") return "Reserving";
-  if (phase === "AWAITING_WALLET") return "Awaiting wallet";
-  if (phase === "SUBMITTED") return "Transaction submitted";
-  if (phase === "VERIFYING") return "Verifying finalized deposit";
-  if (phase === "CONFIRMED") return "Entry confirmed";
-  if (phase === "FAILED") return "Failed";
-  if (phase === "EXPIRED") return "Expired";
-  return "";
-}
-
-function explorerTx(signature: string, cluster: string): string {
-  const suffix = cluster === "devnet" || cluster === "testnet" ? `?cluster=${cluster}` : "";
-  return `https://explorer.solana.com/tx/${encodeURIComponent(signature)}${suffix}`;
-}
-
-function escapeText(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-}
-
-function publicRpc(cluster: string): string {
-  if (cluster === "devnet") return "https://api.devnet.solana.com";
-  if (cluster === "testnet") return "https://api.testnet.solana.com";
-  if (cluster === "localhost" || cluster === "localnet") return "http://127.0.0.1:8899";
-  throw new Error("Unsupported cluster");
-}
-
-async function loadPublicEscrow(): Promise<void> {
-  const config = await api<{
-    solanaCluster: string;
-    escrowProgramId: string;
-    usdcMint: string;
-    usdcDecimals: number;
-  }>("/v1/config/public");
-  state.publicCluster = config.solanaCluster;
-  state.publicProgramId = config.escrowProgramId;
-  state.publicMint = config.usdcMint;
-  state.publicDecimals = config.usdcDecimals;
-  assertDevCluster(config.solanaCluster);
-}
-
-async function joinContest(matchId: string, contestId: string): Promise<void> {
+async function joinContest(matchId: string, contestId: string, kind: ContestCard["contestKind"]): Promise<void> {
   if (!state.teamVersionId || state.teamMatchId !== matchId) {
-    state.joinPhase = "FAILED";
-    state.joinNote = "Save an XI for this match before reserving a seat.";
+    state.joinNote = "Save an XI for this match before joining.";
     await renderContests(matchId);
     return;
   }
-  state.joinPhase = "RESERVING";
-  state.depositPlan = null;
-  state.depositSignature = null;
-  state.joinNote = "Reserving a seat. This is not a deposit and not an entry.";
+  state.joinNote = kind === "FREE" ? "Joining FREE contest…" : "Reserving paid seat…";
   await renderContests(matchId);
   try {
-    await loadPublicEscrow();
-    const reserved = await api<{
-      payment: string;
-      reservation: { id: string; status: string; expiresAt: string };
-      entry: { status: string };
-      depositPlan: DepositPlan | null;
-    }>(`/contests/${contestId}/reservations`, {
-      method: "POST",
-      body: JSON.stringify({ teamVersionId: state.teamVersionId }),
-    });
-    if (reserved.reservation.status !== "PENDING" || reserved.entry.status !== "PENDING" || reserved.payment !== "PAYMENT COMING IN PHASE 4") {
-      state.joinPhase = "FAILED";
-      state.joinNote = "Reservation failed. Nothing was marked paid.";
-    } else if (!reserved.depositPlan) {
-      state.joinPhase = "FAILED";
-      state.joinNote = "Reservation is pending. USDC mint is not configured, so there is nothing to sign.";
+    if (kind === "FREE") {
+      const joined = await api<{ confirmed: boolean; payment: string; entry: { status: string } }>(
+        `/contests/${contestId}/free-join`,
+        { method: "POST", body: JSON.stringify({ teamVersionId: state.teamVersionId }) },
+      );
+      if (!joined.confirmed || joined.payment !== "FREE_NO_PAYMENT" || joined.entry.status !== "CONFIRMED") {
+        throw new Error("FREE join did not confirm");
+      }
+      state.joinNote = "Joined FREE contest. Entry confirmed — no USDC required.";
+      state.joinPhase = "CONFIRMED";
     } else {
+      await loadPublicEscrow();
+      const reserved = await api<{
+        payment: string;
+        reservation: { id: string; status: string };
+        entry: { status: string };
+        depositPlan: DepositPlan | null;
+      }>(`/contests/${contestId}/reservations`, {
+        method: "POST",
+        body: JSON.stringify({ teamVersionId: state.teamVersionId }),
+      });
+      if (reserved.reservation.status !== "PENDING" || !reserved.depositPlan) {
+        throw new Error("Paid reservation failed or mint not configured");
+      }
       state.depositPlan = reserved.depositPlan;
-      state.joinPhase = "AWAITING_WALLET";
-      state.joinNote = "Review the contest, fee, mint, team version, vault, network, and expiry before signing. Transaction submitted is not entry confirmed.";
       sessionStorage.setItem("kickr.dev.reservation", reserved.reservation.id);
+      state.joinNote = "Paid reservation ready. Sign deposit in the wallet flow (devnet only).";
+      await signDeposit(matchId);
+      return;
     }
   } catch (error) {
-    state.joinPhase = "FAILED";
-    state.joinNote = error instanceof Error ? error.message : "Reservation failed";
+    state.joinNote = error instanceof Error ? error.message : "Join failed";
   }
   await renderContests(matchId);
+}
+
+async function loadPublicEscrow(): Promise<void> {
+  const config = await api<{ solanaCluster: string }>("/v1/config/public");
+  state.publicCluster = config.solanaCluster;
+  assertDevCluster(config.solanaCluster);
 }
 
 async function signDeposit(matchId: string): Promise<void> {
   const plan = state.depositPlan;
   const reservationId = sessionStorage.getItem("kickr.dev.reservation");
   if (!plan || !reservationId) {
-    state.joinPhase = "FAILED";
-    state.joinNote = "No deposit plan. The entry is not confirmed.";
+    state.joinNote = "No deposit plan.";
     await renderContests(matchId);
     return;
   }
-  if (Date.parse(plan.expiresAt) <= Date.now()) {
-    state.joinPhase = "EXPIRED";
-    state.joinNote = "The reservation expired before a finalized deposit. This is not an entry.";
-    await renderContests(matchId);
-    return;
-  }
-  state.joinPhase = "AWAITING_WALLET";
-  state.joinNote = "Wallet requested. A signature alone is not a seat.";
-  await renderContests(matchId);
   try {
     assertDevCluster(plan.cluster);
-    const connection = new Connection(publicRpc(plan.cluster), "finalized");
+    const connection = new Connection(publicRpcForCluster(plan.cluster), "finalized");
     const blockhash = await connection.getLatestBlockhash("finalized");
-    const production = (await runtimeEnvironment()) === "production";
-    const browserWallet = readBrowserWallet();
-    let signed: Transaction;
-    if (production) {
-      if (!browserWallet?.publicKey) {
-        throw new Error("Connect a wallet. The development deposit signer is disabled.");
-      }
-      const tx = buildDepositTransaction({
-        plan,
-        feePayer: browserWallet.publicKey,
-        recentBlockhash: blockhash.blockhash,
-      });
-      signed = await browserWallet.signTransaction(tx);
-    } else {
-      const payer = await devDepositKeypair();
-      const tx = buildDepositTransaction({
-        plan,
-        feePayer: payer.publicKey,
-        recentBlockhash: blockhash.blockhash,
-      });
-      signed = await signWithWallet(tx, payer);
-    }
-    const signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+    if (!devDepositKey) devDepositKey = Keypair.generate();
+    const tx = buildDepositTransaction({ plan, feePayer: devDepositKey.publicKey, recentBlockhash: blockhash.blockhash });
+    tx.sign(devDepositKey);
+    const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
     state.depositSignature = signature;
-    state.joinPhase = "SUBMITTED";
-    state.joinNote = "Transaction submitted. Entry is not confirmed.";
-    await renderContests(matchId);
     await api(`/reservations/${reservationId}/deposit-submission`, {
       method: "POST",
       body: JSON.stringify({ signature }),
     });
-    state.joinPhase = "VERIFYING";
-    state.joinNote = "Verifying the finalized transaction against the reservation. Do not treat this as joined.";
-    await renderContests(matchId);
-    await pollConfirmation(matchId, reservationId);
+    state.joinNote = "Deposit submitted. Waiting for indexer confirmation…";
   } catch (error) {
-    state.joinPhase = "FAILED";
-    state.joinNote = error instanceof Error ? error.message : "Deposit failed. The entry was not confirmed.";
-    await renderContests(matchId);
+    state.joinNote = error instanceof Error ? error.message : "Deposit failed";
   }
-}
-
-async function pollConfirmation(matchId: string, reservationId: string): Promise<void> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const viewed = await api<{
-      entry: { status: string; depositSignature: string | null };
-      reservation: { status: string; expiresAt: string };
-    }>(`/reservations/${reservationId}`);
-    if (viewed.entry.status === "CONFIRMED" && viewed.reservation.status === "CONFIRMED") {
-      state.joinPhase = "CONFIRMED";
-      state.joinNote = "Entry confirmed after backend verification of a finalized deposit.";
-      await renderContests(matchId);
-      return;
-    }
-    if (Date.parse(viewed.reservation.expiresAt) <= Date.now() && viewed.entry.status !== "CONFIRMED") {
-      state.joinPhase = "EXPIRED";
-      state.joinNote = "Reservation expired before confirmation. The entry is not confirmed.";
-      await renderContests(matchId);
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  state.joinPhase = "VERIFYING";
-  state.joinNote = "Transaction submitted. Still waiting for a finalized match. Entry is not confirmed.";
   await renderContests(matchId);
 }
 
-async function signWithWallet(tx: Transaction, fallback: Keypair): Promise<Transaction> {
-  const provider = (window as Window & { solana?: { signTransaction?: (tx: Transaction) => Promise<Transaction> } }).solana;
-  if (provider?.signTransaction) {
-    return provider.signTransaction(tx);
-  }
-  tx.sign(fallback);
-  return tx;
-}
-
-async function devDepositKeypair(): Promise<Keypair> {
-  if (await runtimeEnvironment() === "production") {
-    throw new Error("Development deposit signer is disabled");
-  }
-  sessionStorage.removeItem("kickr.dev.depositSecret");
-  sessionStorage.removeItem("kickr.dev.depositSecretLabel");
-  if (!devDepositKey) {
-    devDepositKey = Keypair.generate();
-  }
-  return devDepositKey;
-}
-
-async function renderDetail(id: string): Promise<void> {
-  const data = await api<{ match: MatchCard }>(`/matches/${id}`);
-  const match = data.match;
-  let liveHtml: string;
-  try {
-    const live = await api<{
-      freshness: string;
-      eventCount: number;
-      providerName: string | null;
-      dataHealth: {
-        connected: boolean;
-        delayed: boolean;
-        lastEventAgeMs: number | null;
-        providerName: string | null;
-        eventCount: number;
-      };
-      playerScores: Array<{ playerId: string; baseMilliPoints: number }>;
-      timestamps: { updatedAt: string; lastEventAt: string | null };
-      scale: number;
-    }>(`/matches/${id}/live`);
-    const events = await api<{
-      events: Array<{
-        eventId: string;
-        eventType: string;
-        primaryPlayerId: string | null;
-        timestamp: string;
-        matchMinute: number | null;
-      }>;
-    }>(`/matches/${id}/events`);
-    const health = live.dataHealth;
-    liveHtml = `
-      <div class="card">
-        <div class="meta"><span>Live data</span><span>${live.freshness}</span></div>
-        <p class="quiet">
-          ${health.connected ? "Connected" : "Disconnected"}
-          · ${health.delayed ? "Delayed" : "On time"}
-          · provider ${health.providerName ?? "n/a"}
-          · events ${health.eventCount}
-          · last event age ${health.lastEventAgeMs === null ? "n/a" : `${Math.round(health.lastEventAgeMs / 1000)}s`}
-        </p>
-        <div id="live-feed" class="stack"></div>
-        <p class="note">Base player points are before captain/vice. Team contribution applies the multiplier once.</p>
-        <ul>${events.events.slice(-8).map((event) => `<li class="quiet">${event.matchMinute ?? "-"}' ${event.eventType} · player ${event.primaryPlayerId ?? "n/a"} · ${event.timestamp}</li>`).join("")}</ul>
-      </div>`;
-  } catch {
-    liveHtml = `<p class="quiet">No live score payload yet for this match.</p>`;
-  }
-  let settlementHtml = "";
-  if (state.token && ["FINAL", "DATA_FINALIZING", "FULL_TIME"].includes(match.status)) {
-    settlementHtml = `<div class="card"><h3>Settlement</h3>
-      <p><strong>Match Final</strong> → Result Processing → Results Verified → Prize Available → Claim Prize</p>
-      <p class="quiet">Prize and claim status load per contest entry. Claimed only after a verified on-chain tx with explorer link. Never marked paid on click.</p>
-      <p class="note">USDC moves only via the Solana program vault (claim_payout). Backend cannot transfer funds.</p>
-    </div>`;
-  }
-
-  app.innerHTML = shell(`${match.home.name} vs ${match.away.name}`, `
-    <p class="quiet">${match.competition} · ${kickoffLabel(match.kickoffAt)} · ${match.status.replaceAll("_", " ")}${match.venue ? ` · ${match.venue}` : ""}</p>
-    <div class="row">
-      <a class="quiet" href="#/">Matches</a>
-      <button class="ghost" id="contests">Contests</button>
-      <button class="primary" id="build" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : "XI closed"}</button>
+async function renderMyContests(): Promise<void> {
+  app.innerHTML = shell("My Contests", loading());
+  const data = await api<{ contests: ContestCard[] }>("/me/contests");
+  const now = Date.now();
+  const bucketed = data.contests.filter((contest) => {
+    const lock = Date.parse(contest.lockTime);
+    const status = contest.status;
+    if (state.myBucket === "completed") return ["SETTLED", "REFUNDED", "VOID", "LOCKED"].includes(status) && lock < now - 3 * 3600_000;
+    if (state.myBucket === "live") return ["LOCKED", "IN_PROGRESS", "IN_REVIEW", "READY_FOR_SETTLEMENT", "FULL"].includes(status) || (lock <= now && !["SETTLED", "REFUNDED", "VOID"].includes(status));
+    return contestAcceptsNewEntry(status) || (lock > now && !["SETTLED", "REFUNDED", "VOID"].includes(status));
+  });
+  // Fallback: if bucket filter empties, show all for the selected tab semantics loosely
+  const rows = (bucketed.length ? bucketed : data.contests.filter((c) => {
+    if (state.myBucket === "completed") return ["SETTLED", "REFUNDED", "VOID"].includes(c.status);
+    if (state.myBucket === "live") return ["LOCKED", "IN_PROGRESS", "IN_REVIEW", "READY_FOR_SETTLEMENT"].includes(c.status);
+    return contestAcceptsNewEntry(c.status) || c.status === "FULL";
+  }));
+  const cards = rows.map((contest) => `<article class="card">
+      <div class="meta"><span>${escapeText(contest.templateCode)}</span>${contestBadge(contest)}</div>
+      <h2>${escapeText(contestTitle(contest))}</h2>
+      <p class="quiet">${escapeText(contest.status.replaceAll("_", " "))} · ${contest.filledCount}/${contest.capacity}</p>
+      <div class="row">
+        <button class="ghost" data-board="${contest.contestId}">Leaderboard</button>
+        <button class="primary" data-result="${contest.contestId}">View result</button>
+      </div>
+    </article>`).join("");
+  app.innerHTML = shell("My Contests", `
+    <div class="tabs">
+      ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-my="${bucket}" aria-pressed="${state.myBucket === bucket}">${bucket}</button>`).join("")}
     </div>
-    ${liveHtml}
-    ${settlementHtml}
+    ${cards || empty("No contests yet. Join a FREE contest from a match.")}
   `);
-  document.querySelector("#contests")?.addEventListener("click", () => {
-    location.hash = `#/matches/${id}/contests`;
-  });
-  document.querySelector("#build")?.addEventListener("click", () => {
-    if (match.canBuildXi) {
-      location.hash = `#/matches/${id}/xi`;
-    }
-  });
-  if (state.token && (match.bucket === "live" || match.status === "LIVE" || match.status === "FULL_TIME" || match.status === "DATA_FINALIZING")) {
-    const feed = document.querySelector("#live-feed");
-    // Prefer fetch streaming so the bearer token can be sent (EventSource cannot).
-    void attachLiveStream(id, feed);
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-my]")) {
+    button.addEventListener("click", () => {
+      state.myBucket = button.dataset.my as typeof state.myBucket;
+      void render();
+    });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-board]")) {
+    button.addEventListener("click", () => { location.hash = `#/contests/${button.dataset.board}/leaderboard`; });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-result]")) {
+    button.addEventListener("click", () => { location.hash = `#/contests/${button.dataset.result}/result`; });
   }
 }
 
-async function attachLiveStream(matchId: string, feed: Element | null): Promise<void> {
-  if (!feed || !state.token) {
-    return;
-  }
+async function renderLeaderboard(contestId: string): Promise<void> {
+  app.innerHTML = shell("Leaderboard", loading());
+  const contestResp = await api<{ contest: ContestCard }>(`/contests/${contestId}`);
+  const card = contestResp.contest;
+  let rowsHtml = empty("Leaderboard will appear once scoring starts.");
   try {
-    const response = await fetch(`/matches/${idPath(matchId)}/live-stream`, {
-      headers: { authorization: `Bearer ${state.token}` },
+    const free = await api<{ result: { rows: Array<{ entryId: string; wallet: string; finalScoreMilliPoints: number; rank: number }> } | null }>(
+      `/contests/${contestId}/free-result`,
+    );
+    if (free.result?.rows?.length) {
+      rowsHtml = free.result.rows.map((row) => {
+        const you = row.wallet === state.walletAddress;
+        return `<div class="lb-row ${you ? "you" : ""}"><div class="rank">#${row.rank}</div><div>${you ? "<strong>You</strong>" : escapeText(shortWallet(row.wallet))}</div><div>${(row.finalScoreMilliPoints / 1000).toFixed(1)} pts</div></div>`;
+      }).join("");
+    } else if (card.matchId) {
+      const board = await api<{ leaderboard: Array<{ entryId: string; contestId: string; wallet: string; milliPoints: number; rank: number }> }>(
+        `/matches/${card.matchId}/leaderboard`,
+      );
+      const filtered = board.leaderboard.filter((row) => row.contestId === contestId);
+      if (filtered.length) {
+        rowsHtml = filtered.map((row) => {
+          const you = row.wallet === state.walletAddress;
+          return `<div class="lb-row ${you ? "you" : ""}"><div class="rank">#${row.rank}</div><div>${you ? "<strong>You</strong>" : escapeText(shortWallet(row.wallet))}</div><div>${(row.milliPoints / 1000).toFixed(1)} pts</div></div>`;
+        }).join("");
+      }
+    }
+  } catch {
+    rowsHtml = empty("Could not load leaderboard.");
+  }
+  app.innerHTML = shell("Live leaderboard", `
+    <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span></div>
+    <div class="leaderboard" style="margin-top:16px">${rowsHtml}</div>
+    <div class="row" style="margin-top:16px">
+      <a class="quiet" href="#/my-contests">← My Contests</a>
+      <button class="primary" id="to-result">My result</button>
+    </div>
+  `);
+  document.querySelector("#to-result")?.addEventListener("click", () => {
+    location.hash = `#/contests/${contestId}/result`;
+  });
+}
+
+async function renderResult(contestId: string): Promise<void> {
+  app.innerHTML = shell("Your result", loading());
+  try {
+    const result = await api<{
+      contestKind?: string;
+      claimUiState: string;
+      rank: number | null;
+      finalScoreMilliPoints: number | null;
+      totalEntries: number;
+      prizeBaseUnits: number | null;
+      claimPlan: ClaimPlan | null;
+      stages: string[];
+      entryId: string;
+    }>(`/contests/${contestId}/my-result`);
+    const score = result.finalScoreMilliPoints == null ? "—" : (result.finalScoreMilliPoints / 1000).toFixed(1);
+    const isFree = result.contestKind === "FREE" || result.claimUiState === "final" || result.claimUiState === "pending_result" && result.prizeBaseUnits === 0 && !result.claimPlan;
+    let claimHtml = "";
+    if (result.contestKind === "FREE" || (result.prizeBaseUnits === 0 && result.claimPlan == null && result.claimUiState !== "claimable")) {
+      claimHtml = `<p class="quiet">FREE result — no prize claim. Rank and points only.</p>`;
+    } else if (result.claimUiState === "claimable" && result.claimPlan) {
+      claimHtml = `<button class="primary" id="claim-btn">Claim Prize</button><p class="quiet">Paid Devnet only. Not paid until independently verified.</p>`;
+    } else {
+      claimHtml = `<p class="quiet">Claim state: ${escapeText(result.claimUiState)}</p>`;
+    }
+    app.innerHTML = shell("Final result", `
+      <article class="card highlight">
+        <div class="meta"><span>${escapeText((result.stages ?? []).join(" → "))}</span><span class="badge ${result.contestKind === "FREE" ? "badge-free" : "badge-paid"}">${escapeText(result.contestKind ?? "RESULT")}</span></div>
+        <h2>Rank ${result.rank ?? "—"} / ${result.totalEntries}</h2>
+        <p class="quiet">Score ${score} pts</p>
+        ${claimHtml}
+        <div id="claim-target"></div>
+      </article>
+      <div class="row">
+        <a class="quiet" href="#/contests/${contestId}/leaderboard">Leaderboard</a>
+        <a class="quiet" href="#/my-contests">My Contests</a>
+      </div>
+    `);
+    document.querySelector("#claim-btn")?.addEventListener("click", () => {
+      const target = document.querySelector("#claim-target");
+      if (target) void startClaim(contestId, result.entryId, target);
     });
-    if (!response.ok || !response.body) {
-      feed.textContent = "Live channel unavailable.";
+    void isFree;
+  } catch (error) {
+    app.innerHTML = shell("Your result", empty(error instanceof Error ? error.message : "No confirmed entry yet."));
+  }
+}
+
+async function startClaim(contestId: string, entryId: string, target: Element): Promise<void> {
+  target.innerHTML = `<p class="quiet">Fetching claim plan…</p>`;
+  try {
+    await loadPublicEscrow();
+    const me = await api<{ walletAddress: string }>("/v1/me");
+    const plan = await api<ClaimPlan & { claimUiState?: string; settlementId: string }>(
+      `/entries/${entryId}/claim?contestId=${contestId}`,
+    );
+    if (plan.claimStatus === "CLAIMED" || plan.claimUiState === "already_claimed") {
+      target.innerHTML = `<p>Already claimed</p>`;
       return;
     }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop() ?? "";
-      for (const chunk of chunks) {
-        const line = chunk.split("\n").find((row) => row.startsWith("data: "));
-        if (!line) {
-          continue;
-        }
-        const payload = JSON.parse(line.slice(6)) as {
-          type?: string;
-          eventType?: string;
-          playerId?: string | null;
-          timestamp?: string;
-          explanation?: {
-            event: string;
-            playerId: string | null;
-            basePoints: number;
-            multiplierLabel: string | null;
-            contribution: number;
-            previousPlayerTotal: number;
-            newPlayerTotal: number;
-            previousTeamTotal: number;
-            newTeamTotal: number;
-          };
-        };
-        if (payload.type === "score_update" && payload.explanation) {
-          const item = document.createElement("div");
-          item.className = "quiet";
-          item.textContent = `${payload.explanation.event} · player ${payload.explanation.playerId ?? "n/a"} · base ${payload.explanation.basePoints} · ${payload.explanation.multiplierLabel ?? "no multiplier"} · contribution ${payload.explanation.contribution} · player ${payload.explanation.previousPlayerTotal}→${payload.explanation.newPlayerTotal} · team ${payload.explanation.previousTeamTotal}→${payload.explanation.newTeamTotal} · ${payload.timestamp ?? ""}`;
-          feed.prepend(item);
-        }
-      }
-      if (location.hash !== `#/matches/${matchId}`) {
-        await reader.cancel();
-        break;
-      }
+    const wallet = readBrowserWallet();
+    if (!wallet) {
+      target.innerHTML = `<p class="error">Connect a wallet to claim.</p>`;
+      return;
     }
-  } catch {
-    feed.textContent = "Live channel interrupted.";
+    let connected = wallet.publicKey;
+    if (!connected) connected = await wallet.connect();
+    assertWalletClaimInvariant({
+      principalWallet: me.walletAddress,
+      connectedWallet: connected.toBase58(),
+      destinationWallet: plan.destinationWallet,
+    });
+    const submitted = await signAndSubmitClaim({
+      plan,
+      wallet,
+      rpcUrl: publicRpcForCluster(plan.cluster),
+      appCluster: state.publicCluster,
+      principalWallet: me.walletAddress,
+    });
+    if (!submitted.signature) {
+      target.innerHTML = `<p class="error">${escapeText(submitted.note)}</p>`;
+      return;
+    }
+    await api(`/settlements/${plan.settlementId}/claim-submit`, {
+      method: "POST",
+      body: JSON.stringify({ entryId: plan.entryId, signature: submitted.signature }),
+    });
+    target.innerHTML = `<p>Submitted — confirming…</p>`;
+  } catch (error) {
+    target.innerHTML = `<p class="error">${escapeText(error instanceof Error ? error.message : "Claim failed")}</p>`;
   }
 }
 
-function idPath(id: string): string {
-  return id;
-}
+async function renderBuilder(matchId: string): Promise<void> {
+  app.innerHTML = shell("Build your XI", loading());
+  const matchResp = await api<{ match: MatchCard }>(`/matches/${matchId}`);
+  const playersResp = await api<{ players: PoolPlayer[] }>(`/matches/${matchId}/players`);
+  const rulesResp = await api<{ creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=upcoming`);
+  const players = playersResp.players;
+  const creditCap = rulesResp.creditCap;
+  const maxFromOne = rulesResp.maxPlayersFromOneTeam;
+  state.creditCap = creditCap;
+  state.maxPlayersFromOneTeam = maxFromOne;
+  const byId = new Map(players.map((p) => [p.playerId, p]));
+  const used = calculateCreditsUsed(state.draft.playerIds.map((id) => byId.get(id)?.credit ?? 0));
+  const left = remainingCredits(used, creditCap);
+  const homeClubId = matchResp.match.home.id;
+  const awayClubId = matchResp.match.away.id;
+  const validation = validateFantasyTeam(
+    {
+      playerIds: state.draft.playerIds,
+      captainId: state.draft.captainId,
+      viceId: state.draft.viceId,
+    },
+    players.map((p) => ({
+      playerId: p.playerId,
+      position: p.position,
+      clubId: p.clubId,
+      credit: p.credit,
+    })),
+    homeClubId,
+    awayClubId,
+    { creditCap, maxPlayersFromOneTeam: maxFromOne },
+  );
 
-async function renderBuilder(id: string): Promise<void> {
-  const matchData = await api<{ match: MatchCard }>(`/matches/${id}`);
-  const poolData = await api<{ players: PoolPlayer[] }>(`/matches/${id}/players`);
-  const match = matchData.match;
-  const players = poolData.players;
-  if (!match.canBuildXi) {
-    app.innerHTML = shell("XI closed", `<p class="quiet">This match is ${match.status.replaceAll("_", " ")}. Team changes are not open.</p><a href="#/">Back</a>`);
-    return;
-  }
-  const selected = state.draft.playerIds
-    .map((playerId) => players.find((player) => player.playerId === playerId))
-    .filter((player): player is PoolPlayer => Boolean(player));
-  const used = selected.length ? calculateCreditsUsed(selected.map((player) => player.credit)) : 0;
-  const left = remainingCredits(used, state.creditCap);
-  const visible = players.filter((player) => {
-    const positionOk = state.draft.filter === "ALL" || player.position === state.draft.filter;
-    const query = state.draft.query.toLowerCase();
-    const text = `${player.displayName} ${player.clubName}`.toLowerCase();
-    return positionOk && text.includes(query);
+  const slot = (pos: "GK" | "DEF" | "MID" | "FWD") =>
+    state.draft.playerIds
+      .map((id) => byId.get(id))
+      .filter((p): p is PoolPlayer => !!p && p.position === pos)
+      .map((p) => {
+        const role = p.playerId === state.draft.captainId ? "C" : p.playerId === state.draft.viceId ? "VC" : "";
+        return `<div class="chip">${escapeText(p.shortName)}${role ? `<span class="role badge ${role === "C" ? "badge-c" : "badge-vc"}">${role}</span>` : ""}</div>`;
+      })
+      .join("") || `<div class="chip quiet">${pos}</div>`;
+
+  const filtered = players.filter((p) => {
+    if (state.draft.filter !== "ALL" && p.position !== state.draft.filter) return false;
+    if (state.draft.query && !`${p.displayName} ${p.clubName}`.toLowerCase().includes(state.draft.query.toLowerCase())) return false;
+    return true;
   });
-  const result = selected.length
-    ? validateFantasyTeam(
-        {
-          playerIds: state.draft.playerIds,
-          captainId: state.draft.captainId,
-          viceId: state.draft.viceId,
-        },
-        players.map((player) => ({
-          playerId: player.playerId,
-          clubId: player.clubId,
-          position: player.position,
-          credit: player.credit,
-        })),
-        match.home.id,
-        match.away.id,
-        { creditCap: state.creditCap, maxPlayersFromOneTeam: state.maxPlayersFromOneTeam },
-      )
-    : { valid: false, errors: [] };
-  const lines = ["GK", "DEF", "MID", "FWD"].map((role) => {
-    const chips = selected.filter((player) => player.position === role).map((player) => {
-      const badge = player.playerId === state.draft.captainId ? `<div class="badge">C</div>` : player.playerId === state.draft.viceId ? `<div class="badge">V</div>` : "";
-      return `<div class="chip">${player.shortName}${badge}</div>`;
-    }).join("");
-    return `<div class="line">${chips}</div>`;
-  }).join("");
-  app.innerHTML = shell("Build XI", `
-    <div class="meta"><span>${match.home.shortName} vs ${match.away.shortName}</span><a href="#/matches/${id}">Match</a></div>
-    <div class="row"><strong>${selected.length}/11</strong><span>${left} credits left</span></div>
-    <p class="quiet">Formation ${formationLabel(selected.map((player) => player.position))}</p>
-    <div class="pitch">${lines}</div>
-    <div class="stack">
-      <label>Captain<select id="captain">${selected.map((player) => `<option value="${player.playerId}" ${player.playerId === state.draft.captainId ? "selected" : ""}>${player.shortName}</option>`).join("")}</select></label>
-      <label>Vice<select id="vice">${selected.map((player) => `<option value="${player.playerId}" ${player.playerId === state.draft.viceId ? "selected" : ""}>${player.shortName}</option>`).join("")}</select></label>
+
+  app.innerHTML = shell("Build your XI", `
+    <div class="row"><a class="quiet" href="#/matches/${matchId}">← Match</a><span class="quiet">${escapeText(formationLabel(state.draft.playerIds.map((id) => byId.get(id)?.position ?? "MID")))}</span></div>
+    <article class="card">
+      <div class="meta"><span>Credits</span><span>${used} / ${creditCap} · ${left} left</span></div>
+      <div class="meter"><span style="width:${Math.min(100, (used / creditCap) * 100)}%"></span></div>
+      <div class="pitch" style="margin-top:14px">
+        <div class="line">${slot("FWD")}</div>
+        <div class="line">${slot("MID")}</div>
+        <div class="line">${slot("DEF")}</div>
+        <div class="line">${slot("GK")}</div>
+      </div>
+      ${validation.valid ? "" : `<div class="errors">${validation.errors.map((e) => escapeText(e.message)).join(" · ")}</div>`}
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>
+        <button class="ghost" id="to-contests">Choose contest</button>
+      </div>
+      <p class="note" id="saved"></p>
+    </article>
+    <div class="filters">
+      ${(["ALL", "GK", "DEF", "MID", "FWD"] as const).map((f) => `<button type="button" data-filter="${f}" aria-pressed="${state.draft.filter === f}">${f}</button>`).join("")}
     </div>
-    <div class="filters">${["ALL", "GK", "DEF", "MID", "FWD"].map((role) => `<button type="button" data-filter="${role}" aria-pressed="${state.draft.filter === role}">${role}</button>`).join("")}</div>
-    <input class="search" id="search" placeholder="Search players" value="${state.draft.query}" />
-    <div>${visible.map((player) => `<div class="player"><div><strong>${player.displayName}</strong><div class="quiet">${player.position} · ${player.clubName} · ${player.availability}</div></div><div><div>${player.credit}</div><button class="ghost" data-toggle="${player.playerId}">${state.draft.playerIds.includes(player.playerId) ? "Remove" : "Add"}</button></div></div>`).join("")}</div>
-    <div class="errors">${result.errors.map((error) => error.message).join("<br>")}</div>
-    <button class="primary" id="save" ${result.valid ? "" : "disabled"}>Save team</button>
-    <p class="note" id="saved"></p>
+    <input class="search" id="q" placeholder="Search players" value="${escapeText(state.draft.query)}" />
+    <div class="stack">
+      ${filtered.map((p) => {
+        const selected = state.draft.playerIds.includes(p.playerId);
+        return `<div class="player">
+          <div><strong>${escapeText(p.displayName)}</strong><div class="quiet">${escapeText(p.position)} · ${escapeText(p.clubName)} · ${p.credit} cr</div></div>
+          <div class="row">
+            <button class="ghost" data-toggle="${p.playerId}">${selected ? "Remove" : "Add"}</button>
+            ${selected ? `<button class="ghost" data-cap="${p.playerId}">C</button><button class="ghost" data-vice="${p.playerId}">VC</button>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>
   `);
-  document.querySelector("#search")?.addEventListener("input", (event) => {
+
+  document.querySelector("#q")?.addEventListener("input", (event) => {
     state.draft.query = (event.target as HTMLInputElement).value;
-    void render();
-  });
-  document.querySelector("#captain")?.addEventListener("change", (event) => {
-    state.draft.captainId = (event.target as HTMLSelectElement).value;
-    void render();
-  });
-  document.querySelector("#vice")?.addEventListener("change", (event) => {
-    state.draft.viceId = (event.target as HTMLSelectElement).value;
-    void render();
+    void renderBuilder(matchId);
   });
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-filter]")) {
     button.addEventListener("click", () => {
       state.draft.filter = button.dataset.filter ?? "ALL";
-      void render();
+      void renderBuilder(matchId);
     });
   }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
     button.addEventListener("click", () => {
-      const playerId = button.dataset.toggle ?? "";
-      if (state.draft.playerIds.includes(playerId)) {
-        state.draft.playerIds = state.draft.playerIds.filter((id) => id !== playerId);
+      const id = button.dataset.toggle ?? "";
+      if (state.draft.playerIds.includes(id)) {
+        state.draft.playerIds = state.draft.playerIds.filter((x) => x !== id);
+        if (state.draft.captainId === id) state.draft.captainId = "";
+        if (state.draft.viceId === id) state.draft.viceId = "";
       } else if (state.draft.playerIds.length < 11) {
-        state.draft.playerIds = [...state.draft.playerIds, playerId];
+        state.draft.playerIds = [...state.draft.playerIds, id];
       }
-      if (!state.draft.playerIds.includes(state.draft.captainId)) {
-        state.draft.captainId = state.draft.playerIds[0] ?? "";
-      }
-      if (!state.draft.playerIds.includes(state.draft.viceId) || state.draft.viceId === state.draft.captainId) {
-        state.draft.viceId = state.draft.playerIds.find((item) => item !== state.draft.captainId) ?? "";
-      }
-      void render();
+      void renderBuilder(matchId);
     });
   }
-  document.querySelector("#save")?.addEventListener("click", () => {
-    void saveTeam(id, players, match);
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-cap]")) {
+    button.addEventListener("click", () => {
+      state.draft.captainId = button.dataset.cap ?? "";
+      if (state.draft.viceId === state.draft.captainId) state.draft.viceId = "";
+      void renderBuilder(matchId);
+    });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-vice]")) {
+    button.addEventListener("click", () => {
+      state.draft.viceId = button.dataset.vice ?? "";
+      if (state.draft.captainId === state.draft.viceId) state.draft.captainId = "";
+      void renderBuilder(matchId);
+    });
+  }
+  document.querySelector("#to-contests")?.addEventListener("click", () => {
+    location.hash = `#/matches/${matchId}/contests`;
+  });
+  document.querySelector("#save-xi")?.addEventListener("click", () => {
+    void saveXi(matchId);
   });
 }
 
-async function saveTeam(matchId: string, players: PoolPlayer[], match: MatchCard): Promise<void> {
-  const local = validateFantasyTeam(
-    state.draft,
-    players.map((player) => ({
-      playerId: player.playerId,
-      clubId: player.clubId,
-      position: player.position,
-      credit: player.credit,
-    })),
-    match.home.id,
-    match.away.id,
-    { creditCap: state.creditCap, maxPlayersFromOneTeam: state.maxPlayersFromOneTeam },
-  );
-  if (!local.valid) {
-    return;
-  }
+async function saveXi(matchId: string): Promise<void> {
   const created = await api<{ team: { id: string } }>("/teams", {
     method: "POST",
     body: JSON.stringify({ matchId }),
@@ -865,186 +824,9 @@ async function saveTeam(matchId: string, players: PoolPlayer[], match: MatchCard
   state.teamMatchId = matchId;
   sessionStorage.setItem("kickr.dev.teamVersion", saved.version.id);
   sessionStorage.setItem("kickr.dev.teamMatch", matchId);
-  state.draft.playerIds = saved.version.playerIds;
-  state.draft.captainId = saved.version.captainId;
-  state.draft.viceId = saved.version.viceId;
   const note = document.querySelector("#saved");
-  if (note) {
-    note.textContent = `Saved version ${saved.version.version}. The server copy is the canonical team.`;
-  }
+  if (note) note.textContent = `Saved version ${saved.version.version}. Continue to contests to join FREE.`;
 }
 
-window.addEventListener("hashchange", () => {
-  void render();
-});
+window.addEventListener("hashchange", () => { void render(); });
 void render();
-
-async function hydrateContestSettlements(): Promise<void> {
-  if (!state.token) return;
-  for (const card of document.querySelectorAll<HTMLElement>(".settlement-card")) {
-    const contestId = card.dataset.contestId;
-    const target = card.querySelector(".my-result");
-    if (!contestId || !target) continue;
-    try {
-      const result = await api<{
-        settlementStatus: string | null;
-        claimUiState: string;
-        rank: number | null;
-        finalScoreMilliPoints: number | null;
-        totalEntries: number;
-        prizeBaseUnits: number | null;
-        claimStatus: string;
-        claimSignature: string | null;
-        explorerUrl: string | null;
-        entryId: string;
-        stages: string[];
-      }>(`/contests/${contestId}/my-result`);
-      const score = result.finalScoreMilliPoints == null ? "—" : (result.finalScoreMilliPoints / 1000).toFixed(1);
-      const prize = result.prizeBaseUnits == null ? "—" : (result.prizeBaseUnits / 1_000_000).toFixed(2);
-      const stages = (result.stages ?? []).join(" → ");
-      let body = `<p><strong>MATCH FINAL</strong></p>
-        <p>Score ${score} · Rank ${result.rank ?? "—"} / ${result.totalEntries} · Prize ${prize} USDC</p>
-        <p class="quiet">${stages}</p>`;
-      if (result.claimUiState === "pending_result" || !result.settlementStatus) {
-        body += `<p>Result processing</p>`;
-      } else if (result.claimUiState === "prize_settlement_pending") {
-        body += `<p>Prize settlement pending</p>`;
-      } else if (result.claimUiState === "claimable") {
-        body += `<button type="button" class="primary claim-btn">Claim Prize</button>
-          <p class="quiet">Not paid until the chain tx is independently verified.</p>`;
-      } else if (result.claimUiState === "submitted" || result.claimUiState === "confirming") {
-        body += `<p>Transaction submitted — confirming on Solana…</p>`;
-      } else if (result.claimUiState === "confirmed" && result.explorerUrl) {
-        body += `<p><strong>Prize claimed</strong> · ${prize} USDC · Transaction verified ·
-          <a href="${result.explorerUrl}" target="_blank" rel="noreferrer">View on Solana</a></p>`;
-      } else if (result.prizeBaseUnits === 0) {
-        body += `<p>Prize 0 USDC</p>`;
-      } else if (result.claimUiState === "failed") {
-        body += `<p>Claim failed — reconcile chain before retry.</p>`;
-      }
-      target.innerHTML = body;
-      const btn = target.querySelector(".claim-btn");
-      if (btn) {
-        btn.addEventListener("click", () => {
-          void startClaim(contestId, result.entryId, target);
-        });
-      }
-    } catch {
-      target.innerHTML = `<p class="quiet">Confirmed entry required to view your result.</p>`;
-    }
-  }
-}
-
-async function startClaim(contestId: string, entryId: string, target: Element): Promise<void> {
-  target.innerHTML = `<p>wallet_signing… fetching authorized claim plan</p>`;
-  try {
-    await loadPublicEscrow();
-    const me = await api<{ walletAddress: string }>("/v1/me");
-    state.walletAddress = me.walletAddress;
-    const plan = await api<ClaimPlan & { claimUiState?: string; settlementId: string }>(
-      `/entries/${entryId}/claim?contestId=${contestId}`,
-    );
-    if (plan.claimStatus === "CLAIMED" || plan.claimUiState === "already_claimed") {
-      const url = explorerClaimUrl(plan.claimSignature, plan.cluster);
-      target.innerHTML = `<p>already_claimed${url ? ` · <a href="${url}" target="_blank" rel="noreferrer">View on Solana</a>` : ""}</p>`;
-      return;
-    }
-    const wallet = readBrowserWallet();
-    if (!wallet) {
-      target.innerHTML = `<p>failed</p><p class="quiet">No browser wallet connected (Phantom/Solflare). Claim requires your wallet to sign claim_payout — no private keys in the app.</p>`;
-      return;
-    }
-    let connected = wallet.publicKey;
-    if (!connected) {
-      connected = await wallet.connect();
-    }
-    try {
-      assertWalletClaimInvariant({
-        principalWallet: me.walletAddress,
-        connectedWallet: connected.toBase58(),
-        destinationWallet: plan.destinationWallet,
-      });
-    } catch (error) {
-      target.innerHTML = `<p>wallet_mismatch</p><p class="quiet">${escapeText(error instanceof Error ? error.message : "mismatch")}. No claim proof for another wallet. Not signing.</p>`;
-      return;
-    }
-    if (plan.cluster !== state.publicCluster) {
-      target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">Plan cluster ${escapeText(plan.cluster)} ≠ app ${escapeText(state.publicCluster)}. Not signing.</p>`;
-      return;
-    }
-    target.innerHTML = `<p>wallet_signing… build claim_payout from authorized plan (amount ${plan.amountBaseUnits})</p>`;
-    const submitted = await signAndSubmitClaim({
-      plan,
-      wallet,
-      rpcUrl: publicRpcForCluster(plan.cluster),
-      appCluster: state.publicCluster,
-      principalWallet: me.walletAddress,
-    });
-    if (submitted.uiState === "wallet_mismatch") {
-      target.innerHTML = `<p>wallet_mismatch</p><p class="quiet">${escapeText(submitted.note)}</p>`;
-      return;
-    }
-    if (submitted.uiState === "cluster_mismatch") {
-      target.innerHTML = `<p>cluster_mismatch</p><p class="quiet">${escapeText(submitted.note)}</p>`;
-      return;
-    }
-    if (submitted.uiState === "already_claimed") {
-      target.innerHTML = `<p>already_claimed</p>`;
-      return;
-    }
-    if (!submitted.signature) {
-      target.innerHTML = `<p>failed</p><p class="quiet">${escapeText(submitted.note)}</p>`;
-      return;
-    }
-    // Submitted ≠ claimed
-    target.innerHTML = `<p>submitted — confirming…</p><p class="quiet">Signature recorded. Not paid until independent verification.</p>`;
-    await api(`/settlements/${plan.settlementId}/claim-submit`, {
-      method: "POST",
-      body: JSON.stringify({ entryId: plan.entryId, signature: submitted.signature }),
-    });
-    target.innerHTML = `<p>confirming…</p>`;
-    let confirmed = false;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const reconciled = await api<{
-        claimStatus: string;
-        claimUiState?: string;
-        claimSignature: string | null;
-        explorerUrl: string | null;
-        note?: string;
-      }>(`/settlements/${plan.settlementId}/reconcile-claim`, {
-        method: "POST",
-        body: JSON.stringify({ entryId: plan.entryId, signature: submitted.signature }),
-      });
-      if (reconciled.claimUiState === "confirmed" || reconciled.claimStatus === "CLAIMED") {
-        const url = reconciled.explorerUrl ?? explorerClaimUrl(reconciled.claimSignature, plan.cluster);
-        target.innerHTML = `<p><strong>Prize claimed</strong> · ${(plan.amountBaseUnits / 1_000_000).toFixed(2)} USDC · Transaction verified${
-          url ? ` · <a href="${url}" target="_blank" rel="noreferrer">View on Solana</a>` : ""
-        }</p>`;
-        confirmed = true;
-        break;
-      }
-      if (reconciled.claimUiState === "already_claimed") {
-        target.innerHTML = `<p>already_claimed</p>`;
-        confirmed = true;
-        break;
-      }
-      if (reconciled.claimUiState === "failed") {
-        target.innerHTML = `<p>failed</p><p class="quiet">Wrong or failed tx — not marked paid.</p>`;
-        confirmed = true;
-        break;
-      }
-      // RPC timeout / not finalized → stay confirming
-      await new Promise((r) => setTimeout(r, 2500));
-    }
-    if (!confirmed) {
-      target.innerHTML = `<p>confirming…</p><p class="quiet">Still waiting for finalized verification. Not failed. Not paid.</p>`;
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "error";
-    if (/already.?claimed/i.test(message)) {
-      target.innerHTML = `<p>already_claimed</p>`;
-      return;
-    }
-    target.innerHTML = `<p>failed</p><p class="quiet">${escapeText(message)}</p>`;
-  }
-}

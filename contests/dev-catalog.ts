@@ -1,6 +1,7 @@
 import { DEV_V1_RULESET } from "../domain/scoring/dev-v1.js";
 import type { FeePolicyRecord, PayoutPolicyRecord, ContestTemplateRecord } from "./types.js";
 import { wholeUsdc } from "./types.js";
+import { FREE_FEE_POLICY, FREE_PAYOUT_POLICIES, FREE_TEMPLATES } from "./free/catalog.js";
 
 /**
  * Development contest config. Not a production fee or payout freeze.
@@ -95,11 +96,14 @@ function template(
   capacity: number,
   payout: PayoutPolicyRecord,
 ): ContestTemplateRecord {
+  const entryFeeBaseUnits = wholeUsdc(wholeFee);
   return {
     id,
     templateCode: code,
     contestType: type,
-    entryFeeBaseUnits: wholeUsdc(wholeFee),
+    contestKind: "PAID_DEVNET",
+    entryFeeBaseUnits,
+    prizePoolBaseUnits: 0,
     capacity,
     payoutPolicyId: payout.id,
     payoutPolicyVersion: payout.version,
@@ -120,7 +124,7 @@ if (!h2h || !wta || !grand) {
   throw new Error("dev payout policies missing");
 }
 
-export const DEV_TEMPLATES: readonly ContestTemplateRecord[] = [
+export const DEV_PAID_TEMPLATES: readonly ContestTemplateRecord[] = [
   template("53000000-0000-4000-8000-000000000001", "H2H-5", "HEAD_TO_HEAD", 5, 2, h2h),
   template("53000000-0000-4000-8000-000000000002", "H2H-10", "HEAD_TO_HEAD", 10, 2, h2h),
   template("53000000-0000-4000-8000-000000000003", "H2H-20", "HEAD_TO_HEAD", 20, 2, h2h),
@@ -128,6 +132,14 @@ export const DEV_TEMPLATES: readonly ContestTemplateRecord[] = [
   template("53000000-0000-4000-8000-000000000005", "GRAND-5", "GRAND_LEAGUE", 5, 1000, grand),
   template("53000000-0000-4000-8000-000000000006", "WTA-20", "WINNER_TAKES_ALL", 20, 10, wta),
 ];
+
+/** All seeded templates: FREE product templates plus paid Devnet infrastructure. */
+export const DEV_TEMPLATES: readonly ContestTemplateRecord[] = [
+  ...FREE_TEMPLATES,
+  ...DEV_PAID_TEMPLATES,
+];
+
+export { FREE_FEE_POLICY, FREE_PAYOUT_POLICIES, FREE_TEMPLATES };
 
 export const DEV_SCORING_SNAPSHOT = {
   scoringRulesetId: DEV_V1_RULESET.rulesetId,

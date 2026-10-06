@@ -8,6 +8,7 @@ import { createPgContestStore } from "../db/contest-repository.js";
 import { FootballService } from "../football/service.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
+import { createPgFreeResultStore } from "../contests/free/pg-store.js";
 import { resolveSportsRuntime } from "../sports/factory.js";
 import { InMemoryProviderIdMap, loadProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
 import { createPgProviderIdMapRepository } from "../db/provider-id-map.js";
@@ -75,6 +76,7 @@ if (sports?.developmentOnly) {
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
 const contestStore = createPgContestStore(pool);
+const freeResults = createPgFreeResultStore(pool);
 const contests = new ContestService(
   contestStore,
   football,
@@ -87,6 +89,8 @@ const contests = new ContestService(
     usdcDecimals: config.server.solana.usdcDecimals,
     cluster: config.server.solana.cluster,
   },
+  config.server.nodeEnv !== "production",
+  freeResults,
 );
 const idMap = new InMemoryProviderIdMap();
 // Authoritative production mappings from Postgres. Never invents domain rows.

@@ -105,6 +105,101 @@ export function registerContestRoutes(
     return c.json(result.body, result.status as 202);
   });
 
+
+  app.post("/contests/:id/free-join", async (c) => {
+    const principal = await authenticate(c);
+    const contestId = c.req.param("id");
+    if (!uuidSchema.safeParse(contestId).success) {
+      throw new AppError("VALIDATION", 400, "Contest id must be a uuid");
+    }
+    const body = reserveSchema.parse(await readBody(c));
+    if (body.wallet && body.wallet !== principal.walletAddress) {
+      throw new AppError("WALLET_MISMATCH", 400, "Wallet does not match the signed-in account");
+    }
+    await consumeLimit(deps, c, "reservation", `${principal.accountId}:free:${contestId}`);
+    const result = await replayOrRun(
+      deps,
+      c,
+      "free-join",
+      { contestId, accountId: principal.accountId, teamVersionId: body.teamVersionId },
+      async () => {
+        const joined = await deps.contests.joinFree(
+          contestId,
+          principal.accountId,
+          principal.walletAddress,
+          body.teamVersionId,
+          context(deps, c),
+        );
+        return { status: 201, body: joined };
+      },
+    );
+    return c.json(result.body, result.status as 201);
+  });
+
+  app.get("/me/contests", async (c) => {
+    const principal = await authenticate(c);
+    const contests = await deps.contests.listMyContests(principal.walletAddress);
+    return c.json({ contests });
+  });
+
+  app.get("/contests/:id/free-result", async (c) => {
+    await authenticate(c);
+    const result = await deps.contests.getFreeResult(c.req.param("id"));
+    if (!result) {
+      return c.json({ status: null, result: null });
+    }
+    return c.json({
+      status: result.status,
+      result: {
+        contestId: result.contestId,
+        matchId: result.matchId,
+        finalizedAt: result.finalizedAt,
+        merkleRoot: null,
+        claimable: false,
+        rows: result.rows.map((row) => ({
+          entryId: row.entryId,
+          wallet: row.wallet,
+          teamVersionId: row.teamVersionId,
+          finalScoreMilliPoints: row.finalScoreMilliPoints,
+          rank: row.rank,
+        })),
+      },
+    });
+  });
+
+  app.post("/contests/:id/free-result/finalize", async (c) => {
+    const principal = await authenticate(c);
+    await authorize(c, "RUN_SCORING");
+    const contestId = c.req.param("id");
+    const body = (await readBody(c)) as {
+      scores?: Array<{
+        entryId: string;
+        wallet: string;
+        teamVersionId: string;
+        finalScoreMilliPoints: number;
+      }>;
+    };
+    if (!Array.isArray(body.scores) || body.scores.length === 0) {
+      throw new AppError("VALIDATION", 400, "scores array required");
+    }
+    await consumeLimit(deps, c, "settlement", `${principal.accountId}:free-finalize:${contestId}`);
+    const result = await replayOrRun(
+      deps,
+      c,
+      "free-finalize",
+      { contestId, actorId: principal.accountId, scores: body.scores },
+      async () => {
+        const finalized = await deps.contests.finalizeFreeResult(
+          contestId,
+          body.scores!,
+          context(deps, c),
+        );
+        return { status: 200, body: { result: finalized } };
+      },
+    );
+    return c.json(result.body, result.status as 200);
+  });
+
   app.get("/contests/:id/deposits", async (c) => {
     await authenticate(c);
     await authorize(c, "READ_CONTEST");

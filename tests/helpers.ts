@@ -15,6 +15,7 @@ import { createLocalDevProvider } from "../sports/local-dev-provider.js";
 import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { InMemoryContestStore } from "../contests/memory-store.js";
+import { InMemoryFreeResultStore } from "../contests/free/results.js";
 import { InMemorySettlementStore } from "../settlement/memory-store.js";
 import { SettlementService } from "../settlement/service.js";
 import { SettlementOrchestrator } from "../settlement/orchestrator.js";
@@ -134,12 +135,16 @@ export function buildTestApp(clock: Clock): {
   );
   const redis = new InMemoryRedis();
   const contestStore = new InMemoryContestStore();
+  const freeResults = new InMemoryFreeResultStore();
   const contests = new ContestService(
     contestStore,
     football,
     audit,
     new ContestDiscoveryCache(redis, config.public.environment),
     config.server.contests,
+    undefined,
+    true,
+    freeResults,
   );
   const snapshots = new InMemorySnapshotStore();
   const attestations = new InMemoryAttestationStore();

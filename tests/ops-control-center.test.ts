@@ -202,9 +202,10 @@ describe("operations control center", () => {
       viceId: playerIds[5] ?? "",
     }, { now: NOW, correlationId: null });
     const rooms = await ceo.deps.contests.listMatchContests(LOCAL_DEV_MATCH_UPCOMING, ceo.wallet, { now: NOW, correlationId: null });
-    const contest = rooms[0];
-    const other = rooms[1];
-    if (!contest || !other) throw new Error("missing contests");
+    const paid = rooms.filter((row) => row.contestKind === "PAID_DEVNET");
+    const contest = paid[0];
+    const other = paid[1];
+    if (!contest || !other) throw new Error("missing paid contests");
     const reserved = await ceo.deps.contests.reserve(contest.contestId, ceo.accountId, ceo.wallet, version.id, { now: NOW, correlationId: null });
     const wrong = await ceo.app.request(`/v1/ops/entries/${reserved.entry.id}?contestId=${other.contestId}`, { headers: ceo.headers });
     expect(wrong.status).toBe(404);

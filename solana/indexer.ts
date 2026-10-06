@@ -4,6 +4,7 @@ import type { EntryRecord, ReservationRecord } from "../contests/types.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { EscrowClientConfig } from "./escrow.js";
 import { decideDeposit, type DepositObservation } from "./verify.js";
+import { rejectFreeMoneyPath } from "../contests/kind.js";
 
 export type DepositFetcher = (signature: string) => Promise<DepositObservation | null>;
 
@@ -57,6 +58,23 @@ export class DepositIndexer {
     }
     const reservation = await this.store.findReservationByNonceHash(observation.reservationNonceHash);
     const entry = reservation ? await this.entryFor(reservation) : null;
+    if (reservation) {
+      const contest = await this.store.getContest(reservation.contestId);
+      if (contest) {
+        try {
+          rejectFreeMoneyPath(contest, "deposit-indexer");
+        } catch {
+          this.health.verificationFailures += 1;
+          this.reliability?.hit("deposit_verification_failures");
+          await this.store.recordRejection({
+            signature,
+            reason: "FREE_CONTEST_MONEY_FORBIDDEN",
+            reservationId: reservation.id,
+          });
+          return { outcome: "REJECTED", reason: "FREE_CONTEST_MONEY_FORBIDDEN" };
+        }
+      }
+    }
     const decision = decideDeposit({
       observation,
       programId: this.escrow.programId,

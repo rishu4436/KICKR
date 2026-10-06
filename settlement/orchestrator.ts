@@ -6,6 +6,7 @@ import type { SettlementService } from "./service.js";
 import { loadApprovedSnapshotsForContest, snapshotsToRankedEntries } from "./from-snapshots.js";
 import type { FrozenFeePolicy, FrozenPayoutPolicy } from "./payouts.js";
 import type { SettlementRecord } from "./types.js";
+import { rejectFreeMoneyPath } from "../contests/kind.js";
 
 /**
  * Wires Phase 5.1 APPROVED snapshots + frozen contest rules into Phase 6 calculation.
@@ -28,6 +29,7 @@ export class SettlementOrchestrator {
     if (!contest) {
       throw new AppError("NOT_FOUND", 404, "Contest not found");
     }
+    rejectFreeMoneyPath(contest, "settlement-calculate");
     const entries = (await this.contests.listEntries(contest.id)).filter(
       (entry) => entry.status === "CONFIRMED",
     );
@@ -97,6 +99,10 @@ export class SettlementOrchestrator {
     const settlement = await this.settlements.getById(settlementId);
     if (!settlement) {
       throw new AppError("NOT_FOUND", 404, "Settlement not found");
+    }
+    const prepareContest = await this.contests.getContest(settlement.contestId);
+    if (prepareContest) {
+      rejectFreeMoneyPath(prepareContest, "settlement-prepare");
     }
     if (
       settlement.status !== "SETTLEMENT_APPROVED" &&

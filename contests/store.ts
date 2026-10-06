@@ -72,6 +72,10 @@ export interface ContestStore {
   replaceSnapshot(contestId: string, snapshot: ContestRecord["rulesSnapshot"]): Promise<never>;
   ensureJoinable(matchId: string, templateId: string, lockTime: string, now: Date): Promise<EnsureResult>;
   reserveSeat(input: ReserveSeatInput): Promise<ReserveResult>;
+  /** FREE path: allocate seat and confirm entry with no deposit/escrow. */
+  confirmFreeEntry(input: ReserveSeatInput): Promise<ReserveResult>;
+  /** Confirmed entries for a wallet across contests (My Contests). */
+  listConfirmedEntriesForWallet(wallet: string): Promise<EntryRecord[]>;
   getContest(id: string): Promise<ContestRecord | null>;
   listDiscoverable(matchId: string): Promise<ContestRecord[]>;
   /** Contests on this match where the wallet has a CONFIRMED entry, any contest status. */

@@ -8,6 +8,9 @@ import type { ContestLimits, ContestRecord, DiscoveryView, EntryRecord, Reservat
 import { assertBaseUnits } from "./types.js";
 import { buildDepositPlan, type DepositPlan, type EscrowClientConfig } from "../solana/escrow.js";
 import { assertDevCluster, DEFAULT_ESCROW_PROGRAM_ID } from "../solana/ids.js";
+import { isFreeContest, rejectFreeMoneyPath } from "./kind.js";
+import type { FreeContestResult, FreeResultStore } from "./free/results.js";
+import { finalizeFreeContest, freeClaimUiState } from "./free/results.js";
 
 export interface QuoteView {
   contestId: string;
@@ -35,7 +38,7 @@ const JOINABLE = new Set(["OPEN", "PARTIALLY_FILLED"]);
 
 function discoveryOf(contest: ContestRecord): DiscoveryView {
   const estimatedPrizePoolBaseUnits = assertBaseUnits(
-    contest.filledCount * contest.entryFeeBaseUnits,
+    contest.contestKind === "FREE" ? 0 : contest.filledCount * contest.entryFeeBaseUnits,
     "estimated prize pool",
   );
   return {
@@ -44,7 +47,9 @@ function discoveryOf(contest: ContestRecord): DiscoveryView {
     templateId: contest.templateId,
     templateCode: contest.rulesSnapshot.templateCode,
     contestType: contest.contestType,
+    contestKind: contest.contestKind,
     entryFeeBaseUnits: contest.entryFeeBaseUnits,
+    prizePoolBaseUnits: contest.prizePoolBaseUnits,
     currency: "USDC",
     capacity: contest.capacity,
     filledCount: contest.filledCount,
@@ -76,6 +81,15 @@ function quoteOf(reservation: ReservationRecord): QuoteView {
  * Contest engine. Join creates a PENDING reservation and a PENDING entry.
  * It does not transfer USDC, set CONFIRMED, settle, or emit ENTRY_CONFIRMED.
  */
+export interface FreeJoinView {
+  contest: DiscoveryView;
+  entry: EntryRecord;
+  reservation: ReservationRecord;
+  payment: "FREE_NO_PAYMENT";
+  depositPlan: null;
+  confirmed: true;
+}
+
 export class ContestService {
   constructor(
     private readonly store: ContestStore,
@@ -89,6 +103,9 @@ export class ContestService {
       usdcDecimals: 6,
       cluster: "devnet",
     },
+    /** When false (production), PAID_DEVNET templates are not auto-created or discoverable as joinable. */
+    private readonly allowPaidDevnet: boolean = true,
+    private readonly freeResults: FreeResultStore | null = null,
   ) {
     assertDevCluster(this.escrow.cluster);
   }
@@ -106,7 +123,10 @@ export class ContestService {
     if (cached) {
       return cached;
     }
-    const rows = (await this.store.listDiscoverable(matchId)).map(discoveryOf);
+    let rows = (await this.store.listDiscoverable(matchId)).map(discoveryOf);
+    if (!this.allowPaidDevnet) {
+      rows = rows.filter((row) => row.contestKind === "FREE");
+    }
     await this.cache.writeMatch(matchId, rows);
     return rows;
   }
@@ -164,6 +184,7 @@ export class ContestService {
     if (!contest) {
       throw new AppError("NOT_FOUND", 404, "Not found");
     }
+    rejectFreeMoneyPath(contest, "reservation-with-deposit");
     if (owned.version.matchId !== contest.matchId || owned.team.matchId !== contest.matchId) {
       throw new AppError("TEAM_MATCH_MISMATCH", 409, "Team does not belong to this match");
     }
@@ -284,6 +305,10 @@ export class ContestService {
     if (!current || current.wallet !== wallet) {
       throw new AppError("NOT_FOUND", 404, "Not found");
     }
+    const contestForDeposit = await this.store.getContest(current.contestId);
+    if (contestForDeposit) {
+      rejectFreeMoneyPath(contestForDeposit, "deposit-submission");
+    }
     const reservation = await this.store.submitDeposit(reservationId, signature, ctx.now);
     await this.audit.append({
       action: "DEPOSIT_SUBMITTED",
@@ -369,6 +394,157 @@ export class ContestService {
     return this.store.updateTemplate(templateId, { entryFeeBaseUnits }, ctx.now);
   }
 
+
+  /**
+   * FREE join: confirms entry immediately. No USDC, deposit plan, or escrow.
+   * Idempotent for the same wallet+contest (returns existing confirmed entry).
+   */
+  async joinFree(
+    contestId: string,
+    accountId: string,
+    wallet: string,
+    teamVersionId: string,
+    ctx: RequestContext,
+  ): Promise<FreeJoinView> {
+    const owned = await this.football.getVersionForAccount(teamVersionId, accountId);
+    if (!owned) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (owned.team.status === "LOCKED") {
+      throw new AppError("TEAM_LOCKED", 409, "Locked team cannot be modified");
+    }
+    if (!owned.version.validationResult.valid) {
+      throw new AppError("FANTASY_TEAM_INVALID", 400, "Fantasy team is invalid");
+    }
+    const contest = await this.store.getContest(contestId);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (!isFreeContest(contest)) {
+      throw new AppError("NOT_FREE_CONTEST", 409, "Only FREE contests support direct join");
+    }
+    if (contest.entryFeeBaseUnits !== 0 || contest.prizePoolBaseUnits !== 0) {
+      throw new AppError("FREE_CONTEST_ECONOMICS", 409, "FREE contests must have entry fee 0 and prize pool 0");
+    }
+    if (owned.version.matchId !== contest.matchId || owned.team.matchId !== contest.matchId) {
+      throw new AppError("TEAM_MATCH_MISMATCH", 409, "Team does not belong to this match");
+    }
+    if (!JOINABLE.has(contest.status)) {
+      if (contest.status === "FULL") {
+        throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
+      }
+      throw new AppError("CONTEST_NOT_JOINABLE", 409, "Contest is not open for join");
+    }
+
+    const result = await this.store.confirmFreeEntry({
+      contestId,
+      wallet,
+      teamVersionId,
+      now: ctx.now,
+      ttlSeconds: this.limits.reservationTtlSeconds,
+      limits: this.limits,
+    });
+    if (result.entry.status !== "CONFIRMED" || result.reservation.status !== "CONFIRMED") {
+      throw new AppError("INTERNAL", 500, "Internal error", { expose: false });
+    }
+
+    await this.audit.append({
+      action: "ENTRY_CONFIRMED",
+      occurredAt: ctx.now,
+      entityType: "ENTRY",
+      entityId: result.entry.id,
+      metadata: {
+        contestId,
+        teamVersionId,
+        free: true,
+        payment: "none",
+        amountBaseUnits: 0,
+        seatNumber: result.entry.seatNumber,
+      },
+      actorAccountId: accountId,
+      actorWallet: wallet,
+      correlationId: ctx.correlationId,
+    });
+    if (result.filled) {
+      await this.audit.append({
+        action: "CONTEST_FILLED",
+        occurredAt: ctx.now,
+        entityType: "CONTEST",
+        entityId: result.contest.id,
+        metadata: {
+          filledCount: result.contest.filledCount,
+          capacity: result.contest.capacity,
+          free: true,
+          nextContestId: result.nextContest?.id ?? null,
+        },
+        actorAccountId: accountId,
+        actorWallet: wallet,
+        correlationId: ctx.correlationId,
+      });
+    }
+    if (result.nextContest) {
+      await this.auditCreated(result.nextContest, ctx);
+    }
+    await this.cache.invalidateMatch(contest.matchId);
+    return {
+      contest: discoveryOf(result.contest),
+      entry: result.entry,
+      reservation: result.reservation,
+      payment: "FREE_NO_PAYMENT",
+      depositPlan: null,
+      confirmed: true,
+    };
+  }
+
+  async listMyContests(wallet: string): Promise<Array<DiscoveryView & { entryId: string; teamVersionId: string; joinedAt: string }>> {
+    const entries = await this.store.listConfirmedEntriesForWallet(wallet);
+    const out: Array<DiscoveryView & { entryId: string; teamVersionId: string; joinedAt: string }> = [];
+    for (const entry of entries) {
+      const contest = await this.store.getContest(entry.contestId);
+      if (!contest) continue;
+      out.push({
+        ...discoveryOf(contest),
+        entryId: entry.id,
+        teamVersionId: entry.teamVersionId,
+        joinedAt: entry.joinedAt,
+      });
+    }
+    return out;
+  }
+
+  async getFreeResult(contestId: string): Promise<FreeContestResult | null> {
+    if (!this.freeResults) return null;
+    return this.freeResults.getByContest(contestId);
+  }
+
+  async finalizeFreeResult(
+    contestId: string,
+    scores: Array<{ entryId: string; wallet: string; teamVersionId: string; finalScoreMilliPoints: number }>,
+    ctx: RequestContext,
+  ): Promise<FreeContestResult> {
+    const contest = await this.store.getContest(contestId);
+    if (!contest) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    if (!this.freeResults) {
+      throw new AppError("NOT_FOUND", 404, "Free result store is not available");
+    }
+    const existing = await this.freeResults.getByContest(contestId);
+    if (existing) {
+      return existing;
+    }
+    const result = finalizeFreeContest({
+      contest,
+      scores,
+      nowIso: ctx.now.toISOString(),
+    });
+    return this.freeResults.save(result);
+  }
+
+  freeResultClaimUi(hasFinal: boolean): "pending_result" | "final" {
+    return freeClaimUiState(hasFinal);
+  }
+
   /**
    * Locks joinable contests for a match and freezes teams that already have a seat.
    * Does not pay, refund, or settle. Server-side; not a frontend flag.
@@ -419,6 +595,10 @@ export class ContestService {
   }
 
   private planFor(reservation: ReservationRecord): DepositPlan | null {
+    // Deposit plans are never emitted for amount-0 / FREE reservations.
+    if (reservation.amountBaseUnits === 0) {
+      return null;
+    }
     if (!this.escrow.usdcMint) {
       return null;
     }
@@ -451,7 +631,12 @@ export class ContestService {
   }
 
   private async ensureEnabled(matchId: string, lockTime: string, ctx: RequestContext): Promise<boolean> {
-    const templates = await this.store.listEnabledTemplates();
+    const templates = (await this.store.listEnabledTemplates()).filter((template) => {
+      if (template.contestKind === "FREE") {
+        return true;
+      }
+      return this.allowPaidDevnet;
+    });
     let created = false;
     for (const template of templates) {
       const result = await this.store.ensureJoinable(matchId, template.id, lockTime, ctx.now);

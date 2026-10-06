@@ -14,6 +14,7 @@ import type {
   RulesSnapshot,
 } from "../contests/types.js";
 import { ESCROW_PLACEHOLDER } from "../contests/types.js";
+import { assertFreeEconomics, parseContestKind } from "../contests/kind.js";
 import { confirmationAllowed } from "../contests/expiry.js";
 import { nonceHash, toHex } from "../solana/escrow.js";
 import { AppError } from "../shared/errors.js";
@@ -61,7 +62,9 @@ function templateFrom(row: Row): ContestTemplateRecord {
     id: asString(row.id),
     templateCode: asString(row.template_code),
     contestType: contestType(asString(row.contest_type)),
+    contestKind: parseContestKind(row.contest_kind ?? "PAID_DEVNET"),
     entryFeeBaseUnits: asInt(row.entry_fee_base_units),
+    prizePoolBaseUnits: row.prize_pool_base_units == null ? 0 : asInt(row.prize_pool_base_units),
     capacity: asInt(row.capacity),
     payoutPolicyId: asString(row.payout_policy_id),
     payoutPolicyVersion: asInt(row.payout_policy_version),
@@ -77,15 +80,27 @@ function templateFrom(row: Row): ContestTemplateRecord {
 
 function contestFrom(row: Row): ContestRecord {
   const snapshot = asObject(row.rules_snapshot) as unknown as RulesSnapshot;
+  const contestKind = parseContestKind(
+    row.contest_kind ?? snapshot.contestKind ?? "PAID_DEVNET",
+  );
+  // Backfill snapshot kind for legacy rows so money guards see an explicit kind.
+  if (!snapshot.contestKind) {
+    snapshot.contestKind = contestKind;
+  }
+  if (snapshot.prizePoolBaseUnits === undefined) {
+    snapshot.prizePoolBaseUnits = row.prize_pool_base_units == null ? 0 : asInt(row.prize_pool_base_units);
+  }
   return {
     id: asString(row.id),
     templateId: asString(row.template_id),
     matchId: asString(row.match_id),
     contestType: contestType(asString(row.contest_type)),
+    contestKind,
     status: contestStatus(asString(row.status)),
     capacity: asInt(row.capacity),
     filledCount: asInt(row.filled_count),
     entryFeeBaseUnits: asInt(row.entry_fee_base_units),
+    prizePoolBaseUnits: row.prize_pool_base_units == null ? 0 : asInt(row.prize_pool_base_units),
     currency: "USDC",
     rulesSnapshot: snapshot,
     createdAt: asDate(row.created_at).toISOString(),
@@ -144,13 +159,13 @@ function entryFrom(row: Row): EntryRecord {
   };
 }
 
-const CONTEST_COLUMNS = `id, template_id, match_id, contest_type, status, capacity, filled_count,
-  entry_fee_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at,
+const CONTEST_COLUMNS = `id, template_id, match_id, contest_type, contest_kind, status, capacity, filled_count,
+  entry_fee_base_units, prize_pool_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at,
   confirmed_count, escrow_pda, vault_address, usdc_mint`;
 
 async function loadTemplate(db: Queryable, id: string): Promise<ContestTemplateRecord | null> {
   const result = await db.query<Row>(
-    `SELECT id, template_code, contest_type, entry_fee_base_units, capacity,
+    `SELECT id, template_code, contest_type, contest_kind, entry_fee_base_units, prize_pool_base_units, capacity,
             payout_policy_id, payout_policy_version, fee_policy_id, fee_policy_version,
             currency, enabled, version, created_at, updated_at
      FROM contest_templates WHERE id = $1`,
@@ -179,8 +194,10 @@ async function buildSnapshot(db: Queryable, template: ContestTemplateRecord, mat
     templateCode: template.templateCode,
     templateVersion: template.version,
     entryFeeBaseUnits: template.entryFeeBaseUnits,
+    prizePoolBaseUnits: template.prizePoolBaseUnits,
     capacity: template.capacity,
     contestType: template.contestType,
+    contestKind: template.contestKind,
     payoutPolicyId: asString(payoutRow.id),
     payoutPolicyVersion: asInt(payoutRow.version),
     payoutPolicyType: contestType(asString(payoutRow.policy_type)),
@@ -208,24 +225,31 @@ async function insertContest(
   const snapshot = await buildSnapshot(db, template, matchId, lockTime);
   const id = newId();
   const nowIso = now.toISOString();
+  assertFreeEconomics({
+    contestKind: template.contestKind,
+    entryFeeBaseUnits: template.entryFeeBaseUnits,
+    prizePoolBaseUnits: template.prizePoolBaseUnits,
+  });
   await db.query(
     `INSERT INTO contests (
-       id, template_id, match_id, contest_type, status, capacity, filled_count,
-       entry_fee_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at
+       id, template_id, match_id, contest_type, contest_kind, status, capacity, filled_count,
+       entry_fee_base_units, prize_pool_base_units, currency, rules_snapshot, created_at, updated_at, locked_at, completed_at
      ) VALUES (
-       $1, $2, $3, $4, 'OPEN', $5, 0, $6, 'USDC', $7::jsonb, $8, $8, NULL, NULL
+       $1, $2, $3, $4, $5, 'OPEN', $6, 0, $7, $8, 'USDC', $9::jsonb, $10, $10, NULL, NULL
      )`,
-    [id, template.id, matchId, template.contestType, template.capacity, template.entryFeeBaseUnits, JSON.stringify(snapshot), nowIso],
+    [id, template.id, matchId, template.contestType, template.contestKind, template.capacity, template.entryFeeBaseUnits, template.prizePoolBaseUnits, JSON.stringify(snapshot), nowIso],
   );
   return {
     id,
     templateId: template.id,
     matchId,
     contestType: template.contestType,
+    contestKind: template.contestKind,
     status: "OPEN",
     capacity: template.capacity,
     filledCount: 0,
     entryFeeBaseUnits: template.entryFeeBaseUnits,
+    prizePoolBaseUnits: template.prizePoolBaseUnits,
     currency: "USDC",
     rulesSnapshot: snapshot,
     createdAt: nowIso,
@@ -260,7 +284,7 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
   return {
     async listEnabledTemplates() {
       const result = await db.query<Row>(
-        `SELECT id, template_code, contest_type, entry_fee_base_units, capacity,
+        `SELECT id, template_code, contest_type, contest_kind, entry_fee_base_units, prize_pool_base_units, capacity,
                 payout_policy_id, payout_policy_version, fee_policy_id, fee_policy_version,
                 currency, enabled, version, created_at, updated_at
          FROM contest_templates WHERE enabled = true ORDER BY template_code`,
@@ -281,7 +305,7 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         `UPDATE contest_templates
          SET entry_fee_base_units = $2, enabled = $3, version = version + 1, updated_at = $4
          WHERE id = $1
-         RETURNING id, template_code, contest_type, entry_fee_base_units, capacity,
+         RETURNING id, template_code, contest_type, contest_kind, entry_fee_base_units, prize_pool_base_units, capacity,
                    payout_policy_id, payout_policy_version, fee_policy_id, fee_policy_version,
                    currency, enabled, version, created_at, updated_at`,
         [id, fee, enabled, now.toISOString()],
@@ -362,6 +386,9 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
           throw new AppError("NOT_FOUND", 404, "Not found");
         }
         const contest = contestFrom(row);
+        if (contest.contestKind === "FREE") {
+          throw new AppError("FREE_CONTEST_MONEY_FORBIDDEN", 409, "FREE contests cannot use reservation-with-deposit");
+        }
         if (contest.status === "FULL" || contest.filledCount >= contest.capacity) {
           throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
         }
@@ -621,6 +648,18 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
       return row ? reservationFrom(row) : null;
     },
     async submitDeposit(reservationId, signature, now) {
+      const kindCheck = await db.query<Row>(
+        `SELECT c.contest_kind FROM contest_reservations r
+         JOIN contests c ON c.id = r.contest_id WHERE r.id = $1`,
+        [reservationId],
+      );
+      const kindRow = kindCheck.rows[0];
+      if (!kindRow) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      if (parseContestKind(kindRow.contest_kind) === "FREE") {
+        throw new AppError("FREE_CONTEST_MONEY_FORBIDDEN", 409, "FREE contests cannot use deposit submission");
+      }
       const result = await db.query<Row>(
         `UPDATE contest_reservations
          SET deposit_signature = $2, submitted_at = $3, confirmation_status = 'SUBMITTED', updated_at = $3
@@ -644,6 +683,14 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         );
         if (!selected.rows[0]) {
           throw new AppError("NOT_FOUND", 404, "Not found");
+        }
+        const kindCheck = await tx.query<Row>(
+          `SELECT c.contest_kind FROM contest_reservations r
+           JOIN contests c ON c.id = r.contest_id WHERE r.id = $1`,
+          [input.reservationId],
+        );
+        if (kindCheck.rows[0] && parseContestKind(kindCheck.rows[0].contest_kind) === "FREE") {
+          throw new AppError("FREE_CONTEST_MONEY_FORBIDDEN", 409, "FREE contests cannot use deposit confirmation");
         }
         const current = await tx.query<Row>(
           `SELECT status, deposit_signature, team_version_id FROM contest_entries WHERE reservation_id = $1`,
@@ -754,6 +801,156 @@ export function createPgContestStore(pool: pg.Pool): ContestStore {
         };
       });
     },
+
+    async listConfirmedEntriesForWallet(wallet: string) {
+      const result = await db.query<Row>(
+        `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                mint, vault_address, deposit_receipt, created_at, updated_at
+         FROM contest_entries WHERE wallet = $1 AND status = 'CONFIRMED' ORDER BY joined_at DESC`,
+        [wallet],
+      );
+      return result.rows.map(entryFrom);
+    },
+
+    async confirmFreeEntry(input: ReserveSeatInput): Promise<ReserveResult> {
+      return withTransaction(pool, async (tx) => {
+        const selected = await tx.query<Row>(
+          `SELECT ${CONTEST_COLUMNS} FROM contests WHERE id = $1 FOR UPDATE`,
+          [input.contestId],
+        );
+        const row = selected.rows[0];
+        if (!row) {
+          throw new AppError("NOT_FOUND", 404, "Not found");
+        }
+        const contest = contestFrom(row);
+        if (contest.contestKind !== "FREE") {
+          throw new AppError("NOT_FREE_CONTEST", 409, "confirmFreeEntry is only for FREE contests");
+        }
+        assertFreeEconomics({
+          contestKind: contest.contestKind,
+          entryFeeBaseUnits: contest.entryFeeBaseUnits,
+          prizePoolBaseUnits: contest.prizePoolBaseUnits,
+        });
+        const existing = await tx.query<Row>(
+          `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                  confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                  mint, vault_address, deposit_receipt, created_at, updated_at
+           FROM contest_entries
+           WHERE contest_id = $1 AND wallet = $2 AND status = 'CONFIRMED'`,
+          [contest.id, input.wallet],
+        );
+        if (existing.rows[0]) {
+          const entry = entryFrom(existing.rows[0]);
+          const reservation = await tx.query<Row>(
+            `SELECT id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                    escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                    submitted_at, confirmation_status, created_at, updated_at
+             FROM contest_reservations WHERE id = $1`,
+            [entry.reservationId],
+          );
+          return {
+            contest,
+            reservation: reservationFrom(reservation.rows[0] as Row),
+            entry,
+            nextContest: null,
+            filled: contest.status === "FULL",
+          };
+        }
+        if (contest.status === "FULL" || contest.filledCount >= contest.capacity) {
+          throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
+        }
+        if (contest.status !== "OPEN" && contest.status !== "PARTIALLY_FILLED") {
+          throw new AppError("CONTEST_NOT_JOINABLE", 409, "Contest is not open for reservations");
+        }
+        await assertLimits(tx, contest, input.wallet, input.limits);
+        const dupWallet = await tx.query(
+          `SELECT id FROM contest_entries
+           WHERE contest_id = $1 AND wallet = $2 AND status IN ('PENDING', 'CONFIRMED')`,
+          [contest.id, input.wallet],
+        );
+        if ((dupWallet.rowCount ?? 0) > 0) {
+          throw new AppError("DUPLICATE_ENTRY", 409, "Wallet already has a seat in this contest");
+        }
+        const nextStatus = (contest.filledCount + 1 === contest.capacity ? "FULL" : "PARTIALLY_FILLED") as ContestState;
+        const status = transition("CONTEST", contest.status, nextStatus) as ContestState;
+        const nowIso = input.now.toISOString();
+        const updated = await tx.query(
+          `UPDATE contests
+           SET filled_count = filled_count + 1, status = $2, confirmed_count = confirmed_count + 1, updated_at = $3
+           WHERE id = $1 AND filled_count < capacity AND status = $4`,
+          [contest.id, status, nowIso, contest.status],
+        );
+        if ((updated.rowCount ?? 0) !== 1) {
+          throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
+        }
+        const reservationId = newId();
+        const entryId = newId();
+        const nonce = newNonce();
+        const seatNumber = contest.filledCount + 1;
+        const freePlaceholder = {
+          kind: "ESCROW_PLACEHOLDER",
+          reference: null,
+          todo: "FREE contest — no escrow, no USDC, no vault.",
+        };
+        await tx.query(
+          `INSERT INTO contest_reservations (
+             id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+             escrow_placeholder, issued_at, expires_at, status, nonce_hash, confirmation_status, created_at, updated_at
+           ) VALUES ($1,$2,$3,$4,0,'USDC',$5,$6::jsonb,$7,$7,'CONFIRMED',$8,'VERIFIED',$7,$7)`,
+          [reservationId, contest.id, input.wallet, input.teamVersionId, nonce, JSON.stringify(freePlaceholder), nowIso, toHex(nonceHash(nonce))],
+        );
+        await tx.query(
+          `INSERT INTO contest_entries (
+             id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+             confirmation_status, chain_amount_base_units, created_at, updated_at
+           ) VALUES ($1,$2,$3,$4,$5,'CONFIRMED',$6,$7,'CONFIRMED',0,$7,$7)`,
+          [entryId, contest.id, input.wallet, input.teamVersionId, reservationId, seatNumber, nowIso],
+        );
+        let nextContest: ContestRecord | null = null;
+        if (status === "FULL" && contest.contestType === "HEAD_TO_HEAD") {
+          await tx.query(
+            `INSERT INTO contest_outbox (id, event_type, contest_id, payload, created_at)
+             VALUES ($1, 'CONTEST_FILLED', $2, $3::jsonb, $4)`,
+            [newId(), contest.id, JSON.stringify({ matchId: contest.matchId, templateId: contest.templateId, capacity: contest.capacity, free: true }), nowIso],
+          );
+          const template = await loadTemplate(tx, contest.templateId);
+          if (template) {
+            const open = await tx.query<Row>(
+              `SELECT ${CONTEST_COLUMNS} FROM contests
+               WHERE match_id = $1 AND template_id = $2 AND status IN ('OPEN', 'PARTIALLY_FILLED')`,
+              [contest.matchId, template.id],
+            );
+            if (!open.rows[0]) {
+              nextContest = await insertContest(tx, template, contest.matchId, contest.rulesSnapshot.lockTime, input.now);
+            }
+          }
+        }
+        const reservation = await tx.query<Row>(
+          `SELECT id, contest_id, wallet, team_version_id, amount_base_units, currency, nonce,
+                  escrow_placeholder, issued_at, expires_at, status, nonce_hash, deposit_signature,
+                  submitted_at, confirmation_status, created_at, updated_at
+           FROM contest_reservations WHERE id = $1`,
+          [reservationId],
+        );
+        const entry = await tx.query<Row>(
+          `SELECT id, contest_id, wallet, team_version_id, reservation_id, status, seat_number, joined_at,
+                  confirmation_status, deposit_signature, confirmed_slot, confirmed_block_time, chain_amount_base_units,
+                  mint, vault_address, deposit_receipt, created_at, updated_at
+           FROM contest_entries WHERE id = $1`,
+          [entryId],
+        );
+        const refreshed = await tx.query<Row>(`SELECT ${CONTEST_COLUMNS} FROM contests WHERE id = $1`, [contest.id]);
+        return {
+          contest: contestFrom(refreshed.rows[0] as Row),
+          reservation: reservationFrom(reservation.rows[0] as Row),
+          entry: entryFrom(entry.rows[0] as Row),
+          nextContest,
+          filled: status === "FULL",
+        };
+      });
+    },
+
     async recordRejection(input) {
       await db.query(
         `INSERT INTO deposit_reconciliations (

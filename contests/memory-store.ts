@@ -2,7 +2,8 @@ import { transition } from "../domain/state-machine.js";
 import type { ContestState } from "../domain/state-machine.js";
 import { newId, newNonce } from "../shared/ids.js";
 import { AppError } from "../shared/errors.js";
-import { DEV_FEE_POLICY, DEV_PAYOUT_POLICIES, DEV_SCORING_SNAPSHOT, DEV_TEMPLATES } from "./dev-catalog.js";
+import { DEV_FEE_POLICY, DEV_PAYOUT_POLICIES, DEV_SCORING_SNAPSHOT, DEV_TEMPLATES, FREE_FEE_POLICY, FREE_PAYOUT_POLICIES } from "./dev-catalog.js";
+import { assertFreeEconomics } from "./kind.js";
 import type { ConfirmDepositInput, ConfirmDepositResult, ContestStore, DepositHealth, EnsureResult, ReserveResult, ReserveSeatInput } from "./store.js";
 import type {
   ContestLimits,
@@ -50,8 +51,8 @@ export class InMemoryContestStore implements ContestStore {
 
   constructor() {
     this.templates = DEV_TEMPLATES.map((row) => clone(row));
-    this.payouts = DEV_PAYOUT_POLICIES.map((row) => clone(row));
-    this.fees = [clone(DEV_FEE_POLICY)];
+    this.payouts = [...DEV_PAYOUT_POLICIES, ...FREE_PAYOUT_POLICIES].map((row) => clone(row));
+    this.fees = [clone(DEV_FEE_POLICY), clone(FREE_FEE_POLICY)];
   }
 
   private exclusive<T>(fn: () => T): Promise<T> {
@@ -316,6 +317,143 @@ export class InMemoryContestStore implements ContestStore {
   }
 
 
+
+  async listConfirmedEntriesForWallet(wallet: string): Promise<EntryRecord[]> {
+    return this.exclusive(() =>
+      this.entries
+        .filter((entry) => entry.wallet === wallet && entry.status === "CONFIRMED")
+        .map((entry) => clone(entry)),
+    );
+  }
+
+  /**
+   * FREE join: seat + confirmed entry in one critical section.
+   * No USDC, no deposit signature, no escrow PDA, no vault.
+   */
+  async confirmFreeEntry(input: ReserveSeatInput): Promise<ReserveResult> {
+    return this.exclusive(() => {
+      const contest = this.contests.find((row) => row.id === input.contestId);
+      if (!contest) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      if (contest.contestKind !== "FREE") {
+        throw new AppError("NOT_FREE_CONTEST", 409, "confirmFreeEntry is only for FREE contests");
+      }
+      assertFreeEconomics({
+        contestKind: contest.contestKind,
+        entryFeeBaseUnits: contest.entryFeeBaseUnits,
+        prizePoolBaseUnits: contest.prizePoolBaseUnits,
+      });
+      const existing = this.activeEntry(contest.id, input.wallet);
+      if (existing && existing.status === "CONFIRMED") {
+        const reservation = this.reservations.find((row) => row.id === existing.reservationId);
+        if (!reservation) {
+          throw new AppError("INTERNAL", 500, "Internal error", { expose: false });
+        }
+        return {
+          contest: clone(contest),
+          reservation: clone(reservation),
+          entry: clone(existing),
+          nextContest: null,
+          filled: contest.status === "FULL",
+        };
+      }
+      if (contest.status === "FULL" || contest.filledCount >= contest.capacity) {
+        throw new AppError("CONTEST_FULL", 409, "Contest is full", { details: { refresh: true } });
+      }
+      if (!JOINABLE.has(contest.status)) {
+        throw new AppError("CONTEST_NOT_JOINABLE", 409, "Contest is not open for reservations");
+      }
+      this.assertLimits(contest, input.wallet, input.limits);
+      if (existing) {
+        throw new AppError("DUPLICATE_ENTRY", 409, "Wallet already has a seat in this contest");
+      }
+      if (this.pendingReservation(contest.id, input.teamVersionId)) {
+        throw new AppError("DUPLICATE_RESERVATION", 409, "Team version already has a reservation in this contest");
+      }
+
+      const nowIso = input.now.toISOString();
+      const seatNumber = contest.filledCount + 1;
+      contest.filledCount = seatNumber;
+      if (contest.filledCount === contest.capacity) {
+        contest.status = transition("CONTEST", contest.status, "FULL") as ContestState;
+      } else if (contest.status === "OPEN") {
+        contest.status = transition("CONTEST", contest.status, "PARTIALLY_FILLED") as ContestState;
+      }
+      contest.updatedAt = nowIso;
+      contest.confirmedCount += 1;
+
+      const nonce = newNonce();
+      const reservation: ReservationRecord = {
+        id: newId(),
+        contestId: contest.id,
+        wallet: input.wallet,
+        teamVersionId: input.teamVersionId,
+        amountBaseUnits: 0,
+        currency: "USDC",
+        nonce,
+        escrowPlaceholder: {
+          kind: "ESCROW_PLACEHOLDER",
+          reference: null,
+          todo: "FREE contest — no escrow, no USDC, no vault.",
+        },
+        issuedAt: nowIso,
+        expiresAt: nowIso,
+        status: "CONFIRMED",
+        nonceHash: toHex(nonceHash(nonce)),
+        depositSignature: null,
+        submittedAt: null,
+        confirmationStatus: "VERIFIED",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      this.reservations.push(reservation);
+      const entry: EntryRecord = {
+        id: newId(),
+        contestId: contest.id,
+        wallet: input.wallet,
+        teamVersionId: input.teamVersionId,
+        reservationId: reservation.id,
+        status: "CONFIRMED",
+        seatNumber,
+        joinedAt: nowIso,
+        confirmationStatus: "CONFIRMED",
+        depositSignature: null,
+        confirmedSlot: null,
+        confirmedBlockTime: null,
+        chainAmountBaseUnits: 0,
+        mint: null,
+        vaultAddress: null,
+        depositReceipt: null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      this.entries.push(entry);
+
+      let nextContest: ContestRecord | null = null;
+      const filled = contest.status === "FULL";
+      if (filled && contest.contestType === "HEAD_TO_HEAD") {
+        this.outbox.push({
+          id: newId(),
+          eventType: "CONTEST_FILLED",
+          contestId: contest.id,
+          payload: { matchId: contest.matchId, templateId: contest.templateId, capacity: contest.capacity, free: true },
+          createdAt: nowIso,
+          publishedAt: null,
+        });
+        const template = this.requireTemplate(contest.templateId);
+        nextContest = this.insertContest(template, contest.matchId, contest.rulesSnapshot.lockTime, input.now);
+      }
+      return {
+        contest: clone(contest),
+        reservation: clone(reservation),
+        entry: clone(entry),
+        nextContest: nextContest ? clone(nextContest) : null,
+        filled,
+      };
+    });
+  }
+
   async findReservationByNonceHash(hash: string): Promise<ReservationRecord | null> {
     return this.exclusive(() => {
       const row = this.reservations.find((reservation) => reservation.nonceHash === hash);
@@ -328,6 +466,10 @@ export class InMemoryContestStore implements ContestStore {
       const row = this.reservations.find((reservation) => reservation.id === reservationId);
       if (!row) {
         throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      const contest = this.contests.find((c) => c.id === row.contestId);
+      if (contest?.contestKind === "FREE") {
+        throw new AppError("FREE_CONTEST_MONEY_FORBIDDEN", 409, "FREE contests cannot use deposit submission");
       }
       if (row.status === "CONFIRMED" || row.confirmationStatus === "VERIFIED") {
         throw new AppError("ALREADY_CONFIRMED", 409, "Reservation is already confirmed");
@@ -367,6 +509,9 @@ export class InMemoryContestStore implements ContestStore {
       const contest = reservation ? this.contests.find((row) => row.id === reservation.contestId) : undefined;
       if (!reservation || !entry || !contest) {
         throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+      if (contest.contestKind === "FREE") {
+        throw new AppError("FREE_CONTEST_MONEY_FORBIDDEN", 409, "FREE contests cannot use deposit confirmation");
       }
       if (entry.teamVersionId !== input.teamVersionId) {
         throw new AppError("TEAM_VERSION_MISMATCH", 409, "Entry team version does not match the deposit");
@@ -486,15 +631,22 @@ export class InMemoryContestStore implements ContestStore {
       throw new AppError("CONTEST_CONFLICT", 409, "This template already has its instance for the match");
     }
     const nowIso = now.toISOString();
+    assertFreeEconomics({
+      contestKind: template.contestKind,
+      entryFeeBaseUnits: template.entryFeeBaseUnits,
+      prizePoolBaseUnits: template.prizePoolBaseUnits,
+    });
     const contest: ContestRecord = {
       id: newId(),
       templateId: template.id,
       matchId,
       contestType: template.contestType,
+      contestKind: template.contestKind,
       status: "OPEN",
       capacity: template.capacity,
       filledCount: 0,
       entryFeeBaseUnits: template.entryFeeBaseUnits,
+      prizePoolBaseUnits: template.prizePoolBaseUnits,
       currency: "USDC",
       rulesSnapshot: this.snapshot(template, matchId, lockTime),
       createdAt: nowIso,
@@ -523,8 +675,10 @@ export class InMemoryContestStore implements ContestStore {
       templateCode: template.templateCode,
       templateVersion: template.version,
       entryFeeBaseUnits: template.entryFeeBaseUnits,
+      prizePoolBaseUnits: template.prizePoolBaseUnits,
       capacity: template.capacity,
       contestType: template.contestType,
+      contestKind: template.contestKind,
       payoutPolicyId: payout.id,
       payoutPolicyVersion: payout.version,
       payoutPolicyType: payout.policyType,

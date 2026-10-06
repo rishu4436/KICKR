@@ -5,6 +5,7 @@ export const USDC_BASE_UNITS = 1_000_000;
 export const USDC_CURRENCY = "USDC" as const;
 
 export type ContestType = "HEAD_TO_HEAD" | "WINNER_TAKES_ALL" | "GRAND_LEAGUE";
+export type ContestKind = "FREE" | "PAID_DEVNET";
 export type ReservationStatus = "PENDING" | "EXPIRED" | "CANCELLED" | "CONFIRMED";
 export type EntryStatus = "PENDING" | "CONFIRMED" | "REFUNDED" | "CANCELLED";
 
@@ -29,7 +30,10 @@ export interface ContestTemplateRecord {
   id: string;
   templateCode: string;
   contestType: ContestType;
+  contestKind: ContestKind;
   entryFeeBaseUnits: number;
+  /** Monetary prize pool. FREE templates must be 0. */
+  prizePoolBaseUnits: number;
   capacity: number;
   payoutPolicyId: string;
   payoutPolicyVersion: number;
@@ -51,8 +55,10 @@ export interface RulesSnapshot {
   templateCode: string;
   templateVersion: number;
   entryFeeBaseUnits: number;
+  prizePoolBaseUnits: number;
   capacity: number;
   contestType: ContestType;
+  contestKind: ContestKind;
   payoutPolicyId: string;
   payoutPolicyVersion: number;
   payoutPolicyType: ContestType;
@@ -74,10 +80,12 @@ export interface ContestRecord {
   templateId: string;
   matchId: string;
   contestType: ContestType;
+  contestKind: ContestKind;
   status: ContestState;
   capacity: number;
   filledCount: number;
   entryFeeBaseUnits: number;
+  prizePoolBaseUnits: number;
   currency: typeof USDC_CURRENCY;
   rulesSnapshot: RulesSnapshot;
   createdAt: string;
@@ -178,7 +186,9 @@ export interface DiscoveryView {
   templateId: string;
   templateCode: string;
   contestType: ContestType;
+  contestKind: ContestKind;
   entryFeeBaseUnits: number;
+  prizePoolBaseUnits: number;
   currency: typeof USDC_CURRENCY;
   capacity: number;
   filledCount: number;
