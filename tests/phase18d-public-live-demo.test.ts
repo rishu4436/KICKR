@@ -112,6 +112,12 @@ describe("Phase 18D mode isolation", () => {
     expect(catalog.matches[0]!.dataSource.provider).toBe("demo");
     expect(catalog.matches[0]!.dataSource.label).toMatch(/DEMO DATA|fictional/i);
   });
+
+  it("exactly one DEMO match id for DUAL filtering", () => {
+    const catalog = buildDemoSingleMatchCatalog();
+    expect(catalog.matches.map((m) => m.id)).toHaveLength(1);
+    expect(new Set(catalog.matches.map((m) => m.id)).size).toBe(1);
+  });
 });
 
 describe("Phase 18D demo controls gated from LIVE", () => {

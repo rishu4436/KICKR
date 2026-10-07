@@ -5,6 +5,7 @@ import { isPlayerRole } from "../domain/football/roles.js";
 import type { AppEnv, AppDeps } from "./server.js";
 import { AppError } from "../shared/errors.js";
 import { resolveRequestMode, matchBelongsToMode } from "../sports/mode-filter.js";
+import { buildDemoSingleMatchCatalog } from "../sports/demo-provider.js";
 
 const uuidSchema = z.string().uuid();
 
@@ -38,7 +39,17 @@ export function registerFootballRoutes(
     } catch (error) {
       throw new AppError("VALIDATION", 400, error instanceof Error ? error.message : "Invalid mode");
     }
-    const matches = await deps.football.listMatches(bucket, mode);
+    let matches = await deps.football.listMatches(bucket, mode);
+    const appMode = deps.config.server.sportsData.appMode;
+    // Phase 18D: strict one-match exposure per mode (ignore leftover seed rows).
+    if (mode === "DEMO" && (appMode === "DEMO" || appMode === "DUAL")) {
+      const allowed = new Set(buildDemoSingleMatchCatalog().matches.map((m) => m.id));
+      matches = matches.filter((m) => allowed.has(m.id));
+    }
+    if (mode === "LIVE" && (appMode === "LIVE" || appMode === "DUAL")) {
+      const liveId = deps.config.server.sportsData.liveFixtureId;
+      matches = matches.filter((m) => m.externalFixtureId === liveId);
+    }
     return c.json({
       matches,
       mode: mode ?? null,
@@ -90,6 +101,19 @@ export function registerFootballRoutes(
     }
     if (!matchBelongsToMode(match.dataSource.provider, mode)) {
       throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    const appMode = deps.config.server.sportsData.appMode;
+    if (mode === "DEMO" && (appMode === "DEMO" || appMode === "DUAL")) {
+      const allowed = new Set(buildDemoSingleMatchCatalog().matches.map((m) => m.id));
+      if (!allowed.has(match.id)) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
+    }
+    if (mode === "LIVE" && (appMode === "LIVE" || appMode === "DUAL")) {
+      const liveId = deps.config.server.sportsData.liveFixtureId;
+      if (match.externalFixtureId !== liveId) {
+        throw new AppError("NOT_FOUND", 404, "Not found");
+      }
     }
     return c.json({ match, mode: mode ?? null });
   });
