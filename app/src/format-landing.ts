@@ -24,7 +24,7 @@ export function landingPageHtml(opts: { demoData: boolean; production: boolean }
     <div class="hero-copy">
       ${demoNote}
       <h1 class="hero-title">KICKR</h1>
-      <p class="hero-tag">Fantasy football. Live competition. Verifiable results.</p>
+      <p class="hero-tag">Transparent scoring. Verifiable settlement architecture.</p>
       <p class="hero-lede">Build your XI, join FREE contests, and watch the leaderboard move with every goal — built for the pitch, not a spreadsheet.</p>
       <div class="hero-cta">
         <button type="button" class="primary primary-lg" id="play-free-hero">Play Free</button>

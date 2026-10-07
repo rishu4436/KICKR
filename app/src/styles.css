@@ -109,6 +109,29 @@ button { cursor: pointer; }
   border-color: transparent;
   font-weight: 700;
 }
+.top-account {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.top-account[aria-current="page"] {
+  border-color: rgba(200, 241, 53, 0.45);
+  color: var(--accent);
+}
+.bottom-nav {
+  display: none;
+}
 .quiet { color: var(--muted); font-size: 13px; }
 .page-title, h1 {
   font-family: var(--display);
@@ -587,18 +610,38 @@ h3 {
 .result-hero { text-align: left; }
 .result-rank-block {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   margin-bottom: 12px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--line);
 }
 .rank-hero-xl {
   font-family: var(--display);
-  font-size: clamp(56px, 12vw, 88px);
+  font-size: clamp(48px, 11vw, 80px);
   line-height: 0.95;
   letter-spacing: -0.06em;
   color: var(--accent);
   font-weight: 800;
+}
+.rank-hero-xl .rank-of {
+  font-size: 0.38em;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-left: 0.15em;
+}
+.score-hero-xl {
+  font-family: var(--display);
+  font-size: clamp(28px, 6vw, 40px);
+  letter-spacing: -0.04em;
+  color: var(--text);
+  font-weight: 800;
+}
+.score-hero-xl .pts-unit {
+  font-size: 0.55em;
+  color: var(--muted);
+  font-weight: 700;
+  margin-left: 0.15em;
 }
 .result-hero h2 { margin-top: 6px; font-size: clamp(22px, 4vw, 30px); }
 .result-kicker {
@@ -691,23 +734,20 @@ form.card input, form.card select {
 .league-actions { flex-wrap: wrap; gap: 8px; }
 .share-card .row { flex-wrap: wrap; gap: 8px; }
 
-.demo-banner {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  flex-wrap: wrap;
-  margin: 14px 0 0;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
+.demo-banner,
+.demo-banner-chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 12px 0 0;
+  padding: 6px 12px;
+  border-radius: 999px;
   border: 1px solid rgba(251, 191, 36, 0.35);
-  background: rgba(251, 191, 36, 0.08);
-}
-.demo-banner strong {
+  background: rgba(251, 191, 36, 0.1);
   color: var(--warn);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
-.demo-banner span { color: var(--muted); font-size: 13px; }
 
 .account-card .result-stats { grid-template-columns: repeat(2, 1fr); }
 
@@ -888,8 +928,46 @@ form.card input, form.card select {
   .pitch { min-height: 320px; }
 }
 
+@media (max-width: 899px) {
+  .nav-desktop { display: none; }
+  .shell { padding: 12px 14px calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .bottom-nav {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    gap: 0;
+    margin: 0;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    background: rgba(5, 8, 13, 0.94);
+    border-top: 1px solid var(--line);
+    backdrop-filter: blur(12px);
+  }
+  .bottom-nav a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 4px;
+    border-radius: 12px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .bottom-nav a[aria-current="page"] {
+    color: var(--accent-ink);
+    background: var(--accent);
+  }
+  .bn-label { display: block; }
+}
+
 @media (max-width: 768px) {
-  .shell { padding: 12px 14px 56px; }
   .landing { padding: 12px 14px 40px; }
   .result-stats { grid-template-columns: 1fr 1fr 1fr; }
   .chip { min-width: 68px; max-width: 96px; }
@@ -901,16 +979,14 @@ form.card input, form.card select {
   .player .actions button { flex: 1; }
   .how-grid-3 { grid-template-columns: 1fr; }
   .mock-grid { grid-template-columns: 1fr; }
-  .top .auth-label { display: none; }
 }
 
 @media (max-width: 560px) {
-  .shell { padding: 10px 12px 48px; }
+  .shell { padding: 10px 12px calc(72px + env(safe-area-inset-bottom, 0px)); }
   .match-tile { grid-template-columns: 1fr; gap: 10px; }
   .team-side.away { flex-direction: row; text-align: left; }
   .kickoff { justify-self: start; width: 100%; }
   .crest { width: 42px; height: 42px; }
-  .nav a, .nav button { padding: 7px 11px; font-size: 12px; }
   .result-stats { grid-template-columns: 1fr; }
   .result-stats strong { font-size: 22px; }
   .credits-panel .credits-left { font-size: 26px; }
@@ -921,9 +997,15 @@ form.card input, form.card select {
   .landing-top-actions .ghost { display: none; }
   .hero { padding-top: 24px; }
   .league-actions { flex-direction: column; align-items: stretch; }
-  .league-actions button { width: 100%; }
+  .league-actions button, .league-actions .primary, .league-actions .ghost {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
   form.card label { font-size: 12px; }
-  .rank-hero-xl { font-size: clamp(48px, 18vw, 72px); }
+  .rank-hero-xl { font-size: clamp(44px, 16vw, 68px); }
+  .tabs button, .filters button, .primary, .ghost, .danger { min-height: 44px; }
+  .bottom-nav a { font-size: 11px; padding: 6px 2px; }
 }
 
 @media (max-width: 390px) {

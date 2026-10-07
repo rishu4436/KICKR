@@ -110,8 +110,9 @@ describe("Phase 17 consumer UI cleanup + DEMO indicator", () => {
     const src = readFileSync(new URL("../app/src/main.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/:\s*"Dev signer"/);
     expect(src).toContain("DEMO DATA");
-    expect(src).toContain("Free fantasy football demo using fictional match data.");
+    expect(src).toContain("Fictional match data");
     expect(src).toContain("demoBannerHtml");
+    expect(src).toContain("bottom-nav");
     expect(src).not.toContain("Try LOCAL_DEV / DEMO Cup fixtures.");
   });
 });

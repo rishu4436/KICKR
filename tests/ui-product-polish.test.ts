@@ -8,6 +8,8 @@ import {
   matchTitle,
   playerChip,
   resultHeroHtml,
+  freshnessBannerHtml,
+  freshnessChipLabel,
   xiPitchHtml,
 } from "../app/src/format.js";
 import { landingPageHtml } from "../app/src/format-landing.js";
@@ -83,12 +85,15 @@ describe("UI product polish helpers", () => {
       scoreLabel: "18.5",
       free: true,
     });
-    expect(html).toContain("Final rank");
     expect(html).toContain("#2");
+    expect(html).toContain("of 10");
     expect(html).toContain("18.5");
+    expect(html).toContain("pts");
     expect(html).toContain("FREE contest");
     expect(html).toContain("No monetary prize");
     expect(html).not.toContain("Claim Prize");
+    // Single hero — no duplicated Final rank card
+    expect(html.match(/#2/g)?.length).toBe(1);
   });
 
   it("uses real match names for titles", () => {
@@ -125,7 +130,7 @@ describe("Phase 17.2 landing + consumer chrome", () => {
   it("renders premium landing with hero CTAs and demo labeling", () => {
     const html = landingPageHtml({ demoData: true, production: true });
     expect(html).toContain("KICKR");
-    expect(html).toContain("Fantasy football. Live competition. Verifiable results.");
+    expect(html).toContain("Transparent scoring. Verifiable settlement architecture.");
     expect(html).toContain("Play Free");
     expect(html).toContain("Explore Demo");
     expect(html).toContain("How it works");
@@ -151,8 +156,26 @@ describe("Phase 17.2 landing + consumer chrome", () => {
       free: true,
     });
     expect(html).toContain("rank-hero-xl");
+    expect(html).toContain("score-hero-xl");
     expect(html).toContain("#1");
+    expect(html).toContain("of 100");
     expect(html).toContain("42.0");
     expect(html).not.toContain("Claim Prize");
+  });
+});
+
+describe("Phase 17.3 player-facing freshness copy", () => {
+  it("uses DEMO LIVE for demo data and hides provider jargon", () => {
+    expect(freshnessChipLabel("UNKNOWN", { demoData: true })).toBe("DEMO LIVE");
+    expect(freshnessChipLabel("LIVE", { demoData: true })).toBe("DEMO LIVE");
+    expect(freshnessChipLabel("STALE", { demoData: true })).toBe("UPDATING");
+    expect(freshnessBannerHtml("UNKNOWN", { demoData: true })).toBe("");
+    expect(freshnessBannerHtml("LIVE", { demoData: true })).toBe("");
+    expect(freshnessBannerHtml("UNKNOWN")).toBe("");
+    expect(freshnessChipLabel("UNKNOWN")).toBe("LIVE");
+    expect(freshnessChipLabel("STALE")).toBe("STALE");
+    expect(freshnessBannerHtml("STALE")).toContain("delayed");
+    expect(freshnessBannerHtml("UNKNOWN")).not.toContain("provider");
+    expect(freshnessChipLabel("UNKNOWN", { demoData: true })).not.toContain("FRESHNESS");
   });
 });

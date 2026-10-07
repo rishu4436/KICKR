@@ -92,19 +92,14 @@ export function resultHeroHtml(opts: {
   const banner = opts.free
     ? `<div class="free-banner"><strong>FREE contest</strong><span>No entry fee · No monetary prize · Rank &amp; score only</span></div>`
     : "";
+  const rankLabel = opts.rank != null ? `#${opts.rank}` : "#—";
   return `<article class="card result-hero">
     <div class="result-rank-block">
-      <span class="quiet">Final rank</span>
-      <strong class="rank-hero rank-hero-xl">#${opts.rank ?? "—"}</strong>
-      <span class="quiet">of ${opts.totalEntries}</span>
+      <strong class="rank-hero rank-hero-xl">${rankLabel} <span class="rank-of">of ${opts.totalEntries}</span></strong>
+      <strong class="score-hero score-hero-xl">${escapeText(opts.scoreLabel)} <span class="pts-unit">pts</span></strong>
     </div>
     <p class="quiet result-kicker">${escapeText(opts.contestLabel)}</p>
     <h2>${escapeText(opts.matchLabel)}</h2>
-    <div class="result-stats">
-      <div><span class="quiet">Final rank</span><strong class="rank-hero">#${opts.rank ?? "—"}</strong><span class="quiet">of ${opts.totalEntries}</span></div>
-      <div><span class="quiet">Final score</span><strong class="score-hero">${escapeText(opts.scoreLabel)}</strong><span class="quiet">pts</span></div>
-      <div><span class="quiet">Entrants</span><strong>${opts.totalEntries}</strong></div>
-    </div>
     ${banner}
   </article>`;
 }
@@ -119,23 +114,35 @@ export function creditsPanelHtml(used: number, cap: number, left: number): strin
 }
 
 
-export function freshnessBannerHtml(freshness: string | null | undefined): string {
-  if (!freshness) return "";
-  if (freshness === "UNKNOWN") {
-    return `<div class="note freshness-unknown">FRESHNESS UNKNOWN — provider poll data is not available. Scores may still update from local events.</div>`;
-  }
+export type FreshnessUiOpts = { demoData?: boolean };
+
+/** Player-facing freshness banner — never expose provider/ops jargon. */
+export function freshnessBannerHtml(
+  freshness: string | null | undefined,
+  opts: FreshnessUiOpts = {},
+): string {
+  if (!freshness || freshness === "FINAL" || freshness === "UNKNOWN") return "";
   if (freshness === "STALE") {
     return `<div class="errors">Live data is delayed — scores may catch up shortly.</div>`;
   }
-  if (freshness === "LIVE") {
-    return `<div class="note freshness-live">LIVE — provider freshness is current.</div>`;
+  if (freshness === "LIVE" && !opts.demoData) {
+    return "";
   }
   return "";
 }
 
-export function freshnessChipLabel(freshness: string | null | undefined): string {
+/** Player-facing freshness chip — DEMO LIVE in demo mode; LIVE/STALE/FINAL otherwise. */
+export function freshnessChipLabel(
+  freshness: string | null | undefined,
+  opts: FreshnessUiOpts = {},
+): string {
   if (!freshness) return "";
-  if (freshness === "UNKNOWN") return "FRESHNESS UNKNOWN";
+  if (opts.demoData) {
+    if (freshness === "FINAL") return "FINAL";
+    if (freshness === "STALE") return "UPDATING";
+    return "DEMO LIVE";
+  }
+  if (freshness === "UNKNOWN") return "LIVE";
   return freshness;
 }
 

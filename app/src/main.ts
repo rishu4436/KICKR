@@ -339,7 +339,7 @@ function statusChip(status: string, bucket?: string): string {
 function formatUpdated(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
-    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(iso));
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
   } catch {
     return iso;
   }
@@ -376,7 +376,7 @@ async function runtimeEnvironment(): Promise<string> {
 
 function demoBannerHtml(): string {
   if (!state.demoData) return "";
-  return `<div class="demo-banner" role="status"><strong>DEMO DATA</strong><span>Free fantasy football demo using fictional match data.</span></div>`;
+  return `<div class="demo-banner demo-banner-chip" role="status">DEMO DATA · Fictional match data</div>`;
 }
 
 function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
@@ -437,31 +437,38 @@ function clearSession(): void {
 
 function shell(title: string, body: string): string {
   const hash = route();
-  const auth = state.token
-    ? state.authMode === "wallet" && state.walletAddress
-      ? `Wallet · ${shortWallet(state.walletAddress)}`
-      : state.walletAddress
-        ? `Signed in · ${shortWallet(state.walletAddress)}`
-        : "Signed in"
-    : "";
+  const accountLabel = state.token
+    ? state.walletAddress
+      ? shortWallet(state.walletAddress)
+      : "Account"
+    : "Account";
   const matchesCurrent = hash === "#/" || hash === "#/matches" || hash.startsWith("#/matches");
+  const contestsCurrent = hash.startsWith("#/my-contests") || hash.startsWith("#/contests/");
+  const leaguesCurrent = hash.startsWith("#/leagues") || hash.startsWith("#/share/league");
+  const profileCurrent = hash.startsWith("#/profile") || hash.startsWith("#/u/");
+  const accountCurrent = hash.startsWith("#/account");
   return `<div class="shell">
     <div class="top">
       <a class="brand" href="#/">KICKR</a>
-      <div class="nav">
+      <div class="nav nav-desktop">
         <a href="#/" ${matchesCurrent ? 'aria-current="page"' : ""}>Matches</a>
-        <a href="#/my-contests" ${hash.startsWith("#/my-contests") ? 'aria-current="page"' : ""}>My Contests</a>
-        <a href="#/leagues" ${hash.startsWith("#/leagues") ? 'aria-current="page"' : ""}>Leagues</a>
-        <a href="#/profile" ${hash.startsWith("#/profile") || hash.startsWith("#/u/") ? 'aria-current="page"' : ""}>Profile</a>
-        <a href="#/account" ${hash.startsWith("#/account") ? 'aria-current="page"' : ""}>Account</a>
+        <a href="#/my-contests" ${contestsCurrent ? 'aria-current="page"' : ""}>Contests</a>
+        <a href="#/leagues" ${leaguesCurrent ? 'aria-current="page"' : ""}>Leagues</a>
+        <a href="#/profile" ${profileCurrent ? 'aria-current="page"' : ""}>Profile</a>
       </div>
-      <div class="quiet auth-label" data-auth-label>${escapeText(auth)}</div>
+      <a class="top-account" href="#/account" ${accountCurrent ? 'aria-current="page"' : ""} data-auth-label>${escapeText(accountLabel)}</a>
     </div>
     ${demoBannerHtml()}
     <h1 class="page-title">${title}</h1>
     ${state.error ? `<div class="error">${escapeText(state.error)}</div>` : ""}
     ${body}
     <p class="note">FREE contests &amp; private leagues need no USDC. Credits are a squad budget, not money.${state.environment === "production" || state.demoData ? "" : " Paid Devnet contests stay available only in development."}</p>
+    <nav class="bottom-nav" aria-label="Primary">
+      <a href="#/" ${matchesCurrent ? 'aria-current="page"' : ""}><span class="bn-label">Matches</span></a>
+      <a href="#/my-contests" ${contestsCurrent ? 'aria-current="page"' : ""}><span class="bn-label">Contests</span></a>
+      <a href="#/leagues" ${leaguesCurrent ? 'aria-current="page"' : ""}><span class="bn-label">Leagues</span></a>
+      <a href="#/profile" ${profileCurrent ? 'aria-current="page"' : ""}><span class="bn-label">Profile</span></a>
+    </nav>
   </div>`;
 }
 
@@ -1002,7 +1009,7 @@ async function renderLeaderboard(contestId: string): Promise<void> {
     } else {
       rowsHtml = empty("No scored entries yet for this contest.");
     }
-    staleNote = freshnessBannerHtml(freshness);
+    staleNote = freshnessBannerHtml(freshness, { demoData: state.demoData });
   } catch {
     rowsHtml = empty("Could not load leaderboard.");
   }
@@ -1015,7 +1022,7 @@ async function renderLeaderboard(contestId: string): Promise<void> {
   app.innerHTML = shell(live ? "Live leaderboard" : "Leaderboard", `
     <div class="lb-head">
       <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span>${live ? '<span class="badge badge-live">LIVE</span>' : statusChip(card.matchStatus ?? bucket, bucket)}</div>
-      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshnessChipLabel(freshness))}` : ""}</div>
+      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshnessChipLabel(freshness, { demoData: state.demoData }))}` : ""}</div>
     </div>
     ${matchLabel ? `<p class="quiet" style="margin:4px 0 12px">${escapeText(matchLabel)}</p>` : ""}
     ${staleNote}
@@ -1132,10 +1139,6 @@ async function renderResult(contestId: string): Promise<void> {
       free: isFree,
     });
     app.innerHTML = shell("Final result", `
-      <div class="meta" style="margin-bottom:8px">
-        <span class="quiet">${escapeText((result.stages ?? []).join(" → "))}</span>
-        <span class="badge ${isFree ? "badge-free" : "badge-paid"}">${escapeText(isFree ? "FREE" : (result.contestKind ?? "RESULT"))}</span>
-      </div>
       ${hero}
       ${isFree ? "" : claimHtml}
       <div id="claim-target"></div>
@@ -1648,29 +1651,50 @@ async function renderLeagueDetail(id: string): Promise<void> {
   app.innerHTML = shell("League", loading());
   const data = await api<{ league: LeagueCard }>(`/leagues/${id}`);
   const league = data.league;
+  const isFinal = league.lifecycleBucket === "completed" || league.status === "FINAL" || league.status === "CLOSED";
+  const isUpcoming = league.lifecycleBucket === "upcoming" || (!isFinal && league.lifecycleBucket !== "live");
+  // Owner is not auto-counted as a member until they join with an XI — label that clearly.
+  let memberNote = `${league.memberCount} / ${league.capacity} members`;
+  if (league.isOwner && !league.youJoined) {
+    memberNote += " · You own this league (join with your XI to compete)";
+  } else if (league.isOwner && league.youJoined) {
+    memberNote += " · You own &amp; joined";
+  } else if (league.youJoined) {
+    memberNote += " · Joined";
+  }
+  const shareBtn = isFinal
+    ? `<button class="ghost" id="league-share-btn" type="button">Share result</button>`
+    : "";
+  const primaryInvite = isUpcoming
+    ? `<button class="primary" id="copy-invite" type="button">Invite friends</button>
+        <button class="ghost" id="copy-invite-code" type="button">Copy invite</button>`
+    : `<button class="ghost" id="copy-invite" type="button">Copy invite</button>`;
+  const xiBtn = `<button class="ghost" data-xi="${league.matchId}" type="button">Build / Review XI</button>`;
+  const boardBtn = `<button class="${isUpcoming ? "ghost" : "primary"}" data-board="${league.id}" type="button">Leaderboard</button>`;
   app.innerHTML = shell(escapeText(league.name), `
     <article class="card">
-      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span><span>${escapeText(league.lifecycleBucket)}</span></div>
-      <p class="quiet">${league.memberCount} / ${league.capacity} members${league.isOwner ? " · you own this league" : ""}${league.youJoined ? " · joined" : ""}</p>
-      <p>Invite code <strong class="mono">${escapeText(league.inviteCode)}</strong>
-        <button class="ghost" id="copy-invite" type="button">Copy</button></p>
-      <p class="quiet">Share path: ${escapeText(league.invitePath)}</p>
-      <div class="row">
-        <button class="primary" data-board="${league.id}">Leaderboard</button>
-        <button class="ghost" data-xi="${league.matchId}">Build / review XI</button>
-        <button class="ghost" id="league-share-btn">Share result</button>
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(league.status)}</span>${statusChip(league.status, league.lifecycleBucket)}</div>
+      <p class="quiet">${memberNote}</p>
+      <p>Invite code <strong class="mono">${escapeText(league.inviteCode)}</strong></p>
+      <div class="row league-actions">
+        ${primaryInvite}
+        ${xiBtn}
+        ${boardBtn}
+        ${shareBtn}
         <a class="back-link" href="#/leagues">← Leagues</a>
       </div>
       <div id="share-slot"></div>
     </article>
   `);
-  document.querySelector("#copy-invite")?.addEventListener("click", async () => {
+  const copyInvite = async (btnSel: string) => {
     try {
       await navigator.clipboard.writeText(league.inviteCode);
-      const btn = document.querySelector("#copy-invite");
+      const btn = document.querySelector(btnSel);
       if (btn) btn.textContent = "Copied";
     } catch { /* ignore */ }
-  });
+  };
+  document.querySelector("#copy-invite")?.addEventListener("click", () => { void copyInvite("#copy-invite"); });
+  document.querySelector("#copy-invite-code")?.addEventListener("click", () => { void copyInvite("#copy-invite-code"); });
   document.querySelector("[data-board]")?.addEventListener("click", () => {
     location.hash = `#/leagues/${id}/leaderboard`;
   });
@@ -1700,14 +1724,13 @@ async function renderLeagueLeaderboard(id: string): Promise<void> {
   ).join("") || empty("No members yet. Share the invite code to fill this FREE league.");
   app.innerHTML = shell(escapeText(board.league.name), `
     <div class="lb-head">
-      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(freshnessChipLabel(board.freshness))}</span></div>
-      ${board.scoreSnapshotId ? `<div class="quiet mono">snapshot ${escapeText(board.scoreSnapshotId.slice(0, 48))}…</div>` : ""}
+      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(freshnessChipLabel(board.freshness, { demoData: state.demoData }))}</span></div>
     </div>
-    ${freshnessBannerHtml(board.freshness === "UNKNOWN" ? "UNKNOWN" : board.freshness === "FINAL" ? null : board.freshness)}
+    ${freshnessBannerHtml(board.freshness === "FINAL" ? null : board.freshness, { demoData: state.demoData })}
     <div class="leaderboard">${rows}</div>
     <div class="row" style="margin-top:16px">
       <a class="back-link" href="#/leagues/${id}">← League</a>
-      <button class="ghost" id="league-share">Share</button>
+      ${board.league.lifecycleBucket === "completed" || board.freshness === "FINAL" ? '<button class="ghost" id="league-share">Share result</button>' : ""}
     </div>
     <div id="share-slot"></div>
   `);
