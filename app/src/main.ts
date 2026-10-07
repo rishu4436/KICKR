@@ -208,6 +208,9 @@ interface MatchCard {
   bucket: "upcoming" | "live" | "completed";
   home: { id: string; name: string; shortName: string };
   away: { id: string; name: string; shortName: string };
+  simulated?: boolean;
+  tutorial?: boolean;
+  dataSource?: { provider: string; label: string; fetchedAt?: string };
 }
 
 interface PoolPlayer {
@@ -403,6 +406,26 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+/** Fetch with an explicit dataset mode (dual-mode Matches IA). */
+async function apiForMode<T>(path: string, mode: "LIVE" | "DEMO", init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (state.token) headers.set("authorization", `Bearer ${state.token}`);
+  if (init?.body) headers.set("content-type", "application/json");
+  headers.set("x-kickr-mode", mode);
+  let url = path;
+  if (path.startsWith("/matches")) {
+    const join = path.includes("?") ? "&" : "?";
+    if (!/[?&]mode=/.test(path)) url = `${path}${join}mode=${mode}`;
+  }
+  const response = await fetch(url, { ...init, headers });
+  const body = (await response.json()) as T & { error?: { message: string; details?: { errors: Array<{ message: string }> } } };
+  if (!response.ok) {
+    const details = body.error?.details?.errors?.map((error) => error.message).join(" ");
+    throw new Error(details || body.error?.message || "Request failed");
+  }
+  return body;
+}
+
 async function runtimeEnvironment(): Promise<string> {
   if (state.environment) return state.environment;
   try {
@@ -447,41 +470,33 @@ async function runtimeEnvironment(): Promise<string> {
   return state.environment;
 }
 
+function isTutorialMatch(match: MatchCard): boolean {
+  return match.simulated === true
+    || match.tutorial === true
+    || match.dataSource?.provider === "demo"
+    || /tutorial/i.test(match.competition);
+}
+
 function demoBannerHtml(): string {
-  const mode = effectiveDataMode();
-  if (mode === "LIVE" || state.liveData) {
+  if (state.dualMode) {
+    return `<div class="demo-banner demo-banner-chip tutorial-chip" role="status">Tutorial Match available · Simulated practice + real fixtures</div>`;
+  }
+  if (state.liveData || effectiveDataMode() === "LIVE") {
     return `<div class="demo-banner demo-banner-chip live-data-chip" role="status">LIVE DATA · Sportmonks match feed</div>`;
   }
-  if (mode === "DEMO" || state.demoData) {
-    return `<div class="demo-banner demo-banner-chip" role="status">DEMO DATA · Fictional match data</div>`;
+  if (state.demoData || effectiveDataMode() === "DEMO") {
+    return `<div class="demo-banner demo-banner-chip tutorial-chip" role="status">Tutorial Match · Simulated · Learn KICKR</div>`;
   }
   return "";
 }
 
+/** Public IA: no global LIVE/DEMO toggle — Matches page owns hierarchy. */
 function modeSwitchHtml(): string {
-  if (!state.dualMode && state.modesAvailable.length < 2) return "";
-  const liveOn = state.selectedMode === "LIVE";
-  return `<div class="mode-switch" role="group" aria-label="Data mode">
-    <button type="button" class="mode-btn${liveOn ? " active live" : ""}" data-mode="LIVE" aria-pressed="${liveOn}">LIVE</button>
-    <button type="button" class="mode-btn${!liveOn ? " active demo" : ""}" data-mode="DEMO" aria-pressed="${!liveOn}">DEMO</button>
-  </div>`;
+  return "";
 }
 
-let modeSwitchBound = false;
 function bindModeSwitch(): void {
-  if (modeSwitchBound) return;
-  modeSwitchBound = true;
-  document.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const button = target.closest<HTMLButtonElement>("button[data-mode]");
-    if (!button) return;
-    const mode = button.dataset.mode === "LIVE" ? "LIVE" : "DEMO";
-    if (mode === state.selectedMode) return;
-    setSelectedMode(mode);
-    location.hash = "#/";
-    void render();
-  });
+  /* removed public LIVE/DEMO toggle (Phase 18D.1) */
 }
 
 function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
@@ -734,6 +749,26 @@ async function render(): Promise<void> {
       await renderLeaderboard(hash.split("/")[2] ?? "");
       return;
     }
+    if (hash.startsWith("#/tutorial/") && hash.endsWith("/info")) {
+      setSelectedMode("DEMO");
+      await renderTutorialInfo(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/tutorial/") && hash.endsWith("/simulate")) {
+      setSelectedMode("DEMO");
+      await renderTutorialSimulate(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/tutorial/") && hash.endsWith("/complete")) {
+      setSelectedMode("DEMO");
+      await renderTutorialComplete(hash.split("/")[2] ?? "");
+      return;
+    }
+    if (hash.startsWith("#/tutorial/") && hash.split("/").length === 3) {
+      setSelectedMode("DEMO");
+      await renderTutorialHub(hash.split("/")[2] ?? "");
+      return;
+    }
     if (hash.startsWith("#/matches/") && hash.endsWith("/xi")) {
       await renderBuilder(hash.split("/")[2] ?? "");
       return;
@@ -762,46 +797,127 @@ function matchTile(match: MatchCard): string {
 }
 
 async function renderList(): Promise<void> {
-  app.innerHTML = shell("Upcoming matches", loading());
-  const data = await api<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=${state.bucket}`);
-  state.creditCap = data.creditCap;
-  state.maxPlayersFromOneTeam = data.maxPlayersFromOneTeam;
-  const cards = data.matches.map((match) => `<article class="card">
-      <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}<span>${match.canBuildXi ? "XI open" : "XI locked"}</span></div>
-      ${matchTile(match)}
-      <div class="row">
-        <button class="ghost" data-contests="${match.id}">Contests</button>
-        <button class="primary" data-build="${match.id}" ${match.canBuildXi ? "" : "disabled"}>${match.canBuildXi ? "Build XI" : match.bucket === "live" ? "View live" : "Closed"}</button>
-      </div>
-    </article>`).join("");
+  app.innerHTML = shell("Matches", loading());
   const progress = await loadOnboardingProgress();
   const onboard = onboardingChecklistHtml(onboardingSeen(), [
     { done: progress.signedIn, label: "Connect / sign in", href: "#/" },
-    { done: progress.matchSelected, label: "Choose a match", href: "#/" },
+    { done: progress.matchSelected, label: "Start the Tutorial Match", href: "#/" },
     { done: progress.xiSaved && progress.captainSet && progress.viceSet, label: "Build XI + captain/vice", href: "#/" },
     { done: progress.freeJoined, label: "Join a FREE contest or league", href: "#/leagues" },
     { done: progress.leaderboardReady, label: "Follow the leaderboard", href: "#/my-contests" },
   ]);
+
+  let tutorial: MatchCard[] = [];
+  let liveMatches: MatchCard[] = [];
+  let upcoming: MatchCard[] = [];
+  let results: MatchCard[] = [];
+  let creditCap = state.creditCap;
+  let maxFromOne = state.maxPlayersFromOneTeam;
+
+  if (state.dualMode || state.modesAvailable.length >= 2) {
+    const [demoUp, demoLive, demoDone, liveUp, liveLive, liveDone] = await Promise.all([
+      apiForMode<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>("/matches?bucket=upcoming", "DEMO").catch(() => ({ matches: [], creditCap, maxPlayersFromOneTeam: maxFromOne })),
+      apiForMode<{ matches: MatchCard[] }>("/matches?bucket=live", "DEMO").catch(() => ({ matches: [] })),
+      apiForMode<{ matches: MatchCard[] }>("/matches?bucket=completed", "DEMO").catch(() => ({ matches: [] })),
+      apiForMode<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>("/matches?bucket=upcoming", "LIVE").catch(() => ({ matches: [], creditCap, maxPlayersFromOneTeam: maxFromOne })),
+      apiForMode<{ matches: MatchCard[] }>("/matches?bucket=live", "LIVE").catch(() => ({ matches: [] })),
+      apiForMode<{ matches: MatchCard[] }>("/matches?bucket=completed", "LIVE").catch(() => ({ matches: [] })),
+    ]);
+    creditCap = demoUp.creditCap || liveUp.creditCap || creditCap;
+    maxFromOne = demoUp.maxPlayersFromOneTeam ?? liveUp.maxPlayersFromOneTeam ?? maxFromOne;
+    const demoAll = [...demoUp.matches, ...demoLive.matches, ...demoDone.matches];
+    tutorial = demoAll.filter(isTutorialMatch);
+    if (tutorial.length === 0 && demoAll.length) tutorial = [demoAll[0]!];
+    liveMatches = liveLive.matches.filter((m) => !isTutorialMatch(m));
+    upcoming = liveUp.matches.filter((m) => !isTutorialMatch(m));
+    results = liveDone.matches.filter((m) => !isTutorialMatch(m));
+  } else if (state.demoData || effectiveDataMode() === "DEMO") {
+    const data = await api<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=${state.bucket}`);
+    creditCap = data.creditCap;
+    maxFromOne = data.maxPlayersFromOneTeam;
+    tutorial = data.matches;
+  } else {
+    const [up, live, done] = await Promise.all([
+      api<{ matches: MatchCard[]; creditCap: number; maxPlayersFromOneTeam: number | null }>("/matches?bucket=upcoming"),
+      api<{ matches: MatchCard[] }>("/matches?bucket=live"),
+      api<{ matches: MatchCard[] }>("/matches?bucket=completed"),
+    ]);
+    creditCap = up.creditCap;
+    maxFromOne = up.maxPlayersFromOneTeam;
+    liveMatches = live.matches;
+    upcoming = up.matches;
+    results = done.matches;
+  }
+  state.creditCap = creditCap;
+  state.maxPlayersFromOneTeam = maxFromOne;
+
+  const realCard = (match: MatchCard, cta: string) => `<article class="card">
+      <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}<span>${match.canBuildXi ? "XI open" : "XI locked"}</span></div>
+      ${matchTile(match)}
+      <div class="row">
+        <button class="ghost" data-contests="${match.id}" data-mode="${isTutorialMatch(match) ? "DEMO" : "LIVE"}">Contests</button>
+        <button class="primary" data-build="${match.id}" data-mode="${isTutorialMatch(match) ? "DEMO" : "LIVE"}" ${match.canBuildXi ? "" : "disabled"}>${cta}</button>
+      </div>
+    </article>`;
+
+  const tutorialCards = tutorial.map((match) => {
+    const simBadge = `<span class="badge badge-simulated">SIMULATED</span>`;
+    const learn = `<span class="badge badge-tutorial">LEARN KICKR</span>`;
+    let cta = "Start Tutorial";
+    if (match.status === "LIVE" || match.status === "HALFTIME") cta = "Continue Simulation";
+    else if (match.status === "FINAL" || match.status === "FULL_TIME") cta = "View Tutorial Result";
+    else if (match.canBuildXi) cta = "Start Tutorial";
+    return `<article class="card tutorial-card">
+      <div class="meta"><span class="tutorial-kicker">TUTORIAL MATCH</span>${simBadge}${learn}</div>
+      <h2 class="tutorial-title">${escapeText(match.home.name)} vs ${escapeText(match.away.name)}</h2>
+      <p class="quiet">Learn KICKR by playing through a complete simulated match.</p>
+      ${matchTile(match)}
+      <div class="row">
+        <button class="ghost" data-tutorial-info="${match.id}">How it works</button>
+        <button class="primary" data-tutorial="${match.id}">${cta}</button>
+      </div>
+    </article>`;
+  }).join("");
+
+  const section = (title: string, cards: string) => cards
+    ? `<section class="match-section"><h2 class="section-title">${title}</h2>${cards}</section>`
+    : "";
+
   app.innerHTML = shell("Matches", `
     ${onboard}
-    <div class="tabs">
-      ${(["upcoming", "live", "completed"] as const).map((bucket) => `<button type="button" data-bucket="${bucket}" aria-pressed="${state.bucket === bucket}">${bucket}</button>`).join("")}
-    </div>
-    ${cards || empty("No matches in this view yet.")}
+    ${tutorialCards ? `<section class="match-section tutorial-section">${tutorialCards}</section>` : ""}
+    ${section("Live Now", liveMatches.map((m) => realCard(m, m.canBuildXi ? "Build XI" : "View live")).join(""))}
+    ${section("Upcoming", upcoming.map((m) => realCard(m, "Build XI")).join(""))}
+    ${section("Results", results.map((m) => realCard(m, "View result")).join(""))}
+    ${!tutorialCards && !liveMatches.length && !upcoming.length && !results.length ? empty("No matches in this view yet.") : ""}
   `);
   bindOnboardingDismiss();
   bindModeSwitch();
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-bucket]")) {
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-contests]")) {
     button.addEventListener("click", () => {
-      state.bucket = button.dataset.bucket as typeof state.bucket;
-      void render();
+      const mode = button.dataset.mode === "DEMO" ? "DEMO" : "LIVE";
+      setSelectedMode(mode);
+      location.hash = `#/matches/${button.dataset.contests}/contests`;
     });
   }
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-contests]")) {
-    button.addEventListener("click", () => { location.hash = `#/matches/${button.dataset.contests}/contests`; });
-  }
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-build]")) {
-    button.addEventListener("click", () => { location.hash = `#/matches/${button.dataset.build}/xi`; });
+    button.addEventListener("click", () => {
+      const mode = button.dataset.mode === "DEMO" ? "DEMO" : "LIVE";
+      setSelectedMode(mode);
+      location.hash = `#/matches/${button.dataset.build}/xi`;
+    });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tutorial]")) {
+    button.addEventListener("click", () => {
+      setSelectedMode("DEMO");
+      location.hash = `#/tutorial/${button.dataset.tutorial}`;
+    });
+  }
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tutorial-info]")) {
+    button.addEventListener("click", () => {
+      setSelectedMode("DEMO");
+      location.hash = `#/tutorial/${button.dataset.tutorialInfo}/info`;
+    });
   }
 }
 
@@ -1336,7 +1452,15 @@ async function startClaim(contestId: string, entryId: string, target: Element): 
 
 async function renderBuilder(matchId: string): Promise<void> {
   app.innerHTML = shell("Build your XI", loading());
-  const matchResp = await api<{ match: MatchCard }>(`/matches/${matchId}`);
+  let matchResp = await api<{ match: MatchCard }>(`/matches/${matchId}`).catch(async () => {
+    setSelectedMode("DEMO");
+    return apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO");
+  });
+  if (isTutorialMatch(matchResp.match)) setSelectedMode("DEMO");
+  else if (state.dualMode) setSelectedMode("LIVE");
+  matchResp = isTutorialMatch(matchResp.match)
+    ? await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO")
+    : await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, state.dualMode ? "LIVE" : (effectiveDataMode() ?? "LIVE"));
   const playersResp = await api<{ players: PoolPlayer[] }>(`/matches/${matchId}/players`);
   const rulesResp = await api<{ creditCap: number; maxPlayersFromOneTeam: number | null }>(`/matches?bucket=upcoming`);
   const saved = await api<{
@@ -1411,6 +1535,9 @@ async function renderBuilder(matchId: string): Promise<void> {
   const formation = formationLabel(state.draft.playerIds.map((id) => byId.get(id)?.position ?? "MID"));
   const meterClass = left <= 0 ? "meter full" : left <= 10 ? "meter warn" : "meter";
   const title = matchTitle(matchResp.match);
+  const tutorialBanner = isTutorialMatch(matchResp.match)
+    ? `<div class="meta" style="margin-bottom:10px"><span class="tutorial-kicker">TUTORIAL MATCH · SIMULATED</span><span class="badge badge-free">FREE</span></div>`
+    : "";
   const lockBanner = readOnly
     ? `<div class="lock-banner"><strong>Read-only</strong><span>Match is locked — you can review this XI but not change it.</span></div>`
     : "";
@@ -1419,8 +1546,9 @@ async function renderBuilder(matchId: string): Promise<void> {
     : `<ul class="errors">${validation.errors.map((e) => `<li>${escapeText(e.message)}</li>`).join("")}</ul>`;
 
   app.innerHTML = shell(readOnly ? "Your XI" : "Build your XI", `
+    ${tutorialBanner}
     <div class="xi-toolbar">
-      <a class="back-link" href="#/matches/${matchId}">← <strong>${escapeText(title)}</strong></a>
+      <a class="back-link" href="${isTutorialMatch(matchResp.match) ? `#/tutorial/${matchId}` : `#/matches/${matchId}`}">← <strong>${escapeText(title)}</strong></a>
       <div class="meta">
         <span class="badge badge-state">${escapeText(formation)}</span>
         <span class="quiet">${selectedCount}/11 selected</span>
@@ -1475,7 +1603,13 @@ async function renderBuilder(matchId: string): Promise<void> {
     </div>`}
   `);
 
-  document.querySelector("#q")?.addEventListener("input", (event) => {
+  const qEl = document.querySelector<HTMLInputElement>("#q");
+  if (qEl && document.activeElement === qEl) {
+    const pos = qEl.selectionStart ?? qEl.value.length;
+    qEl.focus();
+    try { qEl.setSelectionRange(pos, pos); } catch { /* ignore */ }
+  }
+  qEl?.addEventListener("input", (event) => {
     state.draft.query = (event.target as HTMLInputElement).value;
     void renderBuilder(matchId);
   });
@@ -1494,6 +1628,34 @@ async function renderBuilder(matchId: string): Promise<void> {
           if (state.draft.captainId === id) state.draft.captainId = "";
           if (state.draft.viceId === id) state.draft.viceId = "";
         } else if (state.draft.playerIds.length < 11) {
+          const player = byId.get(id);
+          if (!player) return;
+          // Harden: block adds that break formation caps or credit budget.
+          const counts: Record<string, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 };
+          for (const pid of state.draft.playerIds) {
+            const p = byId.get(pid);
+            if (p) counts[p.position] = (counts[p.position] ?? 0) + 1;
+          }
+          const maxPos: Record<string, number> = { GK: 1, DEF: 5, MID: 5, FWD: 3 };
+          if ((counts[player.position] ?? 0) >= (maxPos[player.position] ?? 0)) {
+            const note = document.querySelector("#saved");
+            if (note) note.textContent = `Formation limit: max ${maxPos[player.position]} ${player.position}.`;
+            return;
+          }
+          const nextUsed = used + player.credit;
+          if (nextUsed > creditCap) {
+            const note = document.querySelector("#saved");
+            if (note) note.textContent = `Over budget: ${player.displayName} is ${player.credit} cr (${nextUsed}/${creditCap}).`;
+            return;
+          }
+          if (maxFromOne != null) {
+            const fromClub = state.draft.playerIds.filter((pid) => byId.get(pid)?.clubId === player.clubId).length;
+            if (fromClub >= maxFromOne) {
+              const note = document.querySelector("#saved");
+              if (note) note.textContent = `Club limit: max ${maxFromOne} from one side.`;
+              return;
+            }
+          }
           state.draft.playerIds = [...state.draft.playerIds, id];
         }
         void renderBuilder(matchId);
@@ -1941,6 +2103,306 @@ async function renderProfile(wallet: string | null): Promise<void> {
       } catch (error) {
         if (note) note.textContent = error instanceof Error ? error.message : "Update failed";
       }
+    })();
+  });
+}
+
+
+
+async function renderTutorialInfo(matchId: string): Promise<void> {
+  setSelectedMode("DEMO");
+  app.innerHTML = shell("Tutorial Match", loading());
+  const data = await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO");
+  const match = data.match;
+  app.innerHTML = shell("Tutorial Match · Simulated", `
+    <article class="card tutorial-card">
+      <div class="meta"><span class="tutorial-kicker">TUTORIAL MATCH · SIMULATED</span><span class="badge badge-free">FREE</span></div>
+      <h2>${escapeText(match.home.name)} vs ${escapeText(match.away.name)}</h2>
+      <p>Learn KICKR by playing through a complete simulated match.</p>
+      <ul class="tutorial-bullets">
+        <li>Fictional clubs &amp; players — not a live Sportmonks fixture</li>
+        <li>Build a real XI (11 players, C/VC, 100-credit budget, formation rules)</li>
+        <li>Join the FREE Tutorial Contest — no wallet payment</li>
+        <li>Start Match Simulation — auto-progress PRE → 1H → HT → 2H → FT (~4 min)</li>
+        <li>See goals, assists, SOT, cards, subs, captain bonus, and a VAR reversal</li>
+      </ul>
+      <div class="row">
+        <a class="back-link" href="#/">← Matches</a>
+        <button class="primary" id="tut-build">Build Your XI</button>
+      </div>
+    </article>
+  `);
+  document.querySelector("#tut-build")?.addEventListener("click", () => {
+    location.hash = `#/matches/${matchId}/xi`;
+  });
+}
+
+async function renderTutorialHub(matchId: string): Promise<void> {
+  setSelectedMode("DEMO");
+  app.innerHTML = shell("Tutorial Match", loading());
+  const data = await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO");
+  const match = data.match;
+  let sim: { completed?: boolean; running?: boolean; matchStatus?: string } | null = null;
+  try {
+    sim = await api(`/v1/tutorial/matches/${matchId}`);
+  } catch { /* not started */ }
+  const saved = await apiForMode<{
+    team: { id: string } | null;
+    latest: { id: string } | null;
+    readOnly: boolean;
+  }>(`/matches/${matchId}/my-team`, "DEMO");
+  if (saved.latest) {
+    state.teamVersionId = saved.latest.id;
+    state.teamMatchId = matchId;
+  }
+  const hasXi = Boolean(saved.latest);
+  let joined = false;
+  try {
+    const contests = await apiForMode<{ contests: ContestCard[] }>(`/matches/${matchId}/contests`, "DEMO");
+    const free = contests.contests.find((c) => c.contestKind === "FREE");
+    if (free) {
+      const mine = await api<{ contests: ContestCard[] }>("/me/contests").catch(() => ({ contests: [] }));
+      joined = mine.contests.some((c) => c.contestId === free.contestId);
+    }
+  } catch { /* ignore */ }
+
+  const status = sim?.matchStatus ?? match.status;
+  const done = sim?.completed || status === "FINAL";
+  const running = Boolean(sim?.running);
+
+  let primary = `<button class="primary" id="tut-build">${hasXi ? "Edit XI" : "Build Your XI"}</button>`;
+  if (done) {
+    primary = `<button class="primary" id="tut-complete">Tutorial Complete</button>`;
+  } else if (running || status === "LIVE") {
+    primary = `<button class="primary" id="tut-sim">Continue Simulation</button>`;
+  } else if (hasXi) {
+    primary = `<button class="primary" id="tut-contests">Join Tutorial Contest</button>
+      <button class="ghost" id="tut-sim-start">Start Match Simulation</button>`;
+  }
+
+  app.innerHTML = shell("Tutorial Match · Simulated", `
+    <article class="card tutorial-card">
+      <div class="meta"><span class="tutorial-kicker">TUTORIAL MATCH · SIMULATED</span><span class="badge badge-free">FREE</span></div>
+      <h2>${escapeText(match.home.name)} vs ${escapeText(match.away.name)}</h2>
+      <p class="quiet">Learn KICKR by playing through a complete simulated match.</p>
+      ${matchTile(match)}
+      <ol class="tutorial-steps">
+        <li class="${hasXi ? "done" : ""}">Build Your XI (real squad builder)</li>
+        <li class="${joined ? "done" : ""}">Join Tutorial Contest — FREE · SIMULATED</li>
+        <li class="${running || done ? "done" : ""}">Start Match Simulation (auto-progress)</li>
+        <li class="${done ? "done" : ""}">See final score, rank &amp; captain contribution</li>
+      </ol>
+      <div class="row">
+        <a class="back-link" href="#/">← Matches</a>
+        <button class="ghost" id="tut-info">How it works</button>
+        ${primary}
+      </div>
+      ${done ? `<div class="row" style="margin-top:12px"><button class="ghost" id="tut-reset">Reset Tutorial</button></div>` : ""}
+      <p class="note" id="tut-note"></p>
+    </article>
+  `);
+  document.querySelector("#tut-info")?.addEventListener("click", () => { location.hash = `#/tutorial/${matchId}/info`; });
+  document.querySelector("#tut-build")?.addEventListener("click", () => { location.hash = `#/matches/${matchId}/xi`; });
+  document.querySelector("#tut-contests")?.addEventListener("click", () => { location.hash = `#/matches/${matchId}/contests`; });
+  document.querySelector("#tut-sim")?.addEventListener("click", () => { location.hash = `#/tutorial/${matchId}/simulate`; });
+  document.querySelector("#tut-sim-start")?.addEventListener("click", () => {
+    void (async () => {
+      const note = document.querySelector("#tut-note");
+      try {
+        if (!state.teamVersionId) {
+          if (note) note.textContent = "Save an XI before starting the simulation.";
+          return;
+        }
+        // Auto-join FREE contest if not joined
+        const contests = await apiForMode<{ contests: ContestCard[] }>(`/matches/${matchId}/contests`, "DEMO");
+        const free = contests.contests.find((c) => c.contestKind === "FREE");
+        if (free && state.teamVersionId) {
+          try {
+            await api(`/contests/${free.contestId}/free-join`, {
+              method: "POST",
+              body: JSON.stringify({ teamVersionId: state.teamVersionId }),
+            });
+          } catch { /* may already be joined */ }
+        }
+        await api(`/v1/tutorial/matches/${matchId}/start`, { method: "POST", body: "{}" });
+        location.hash = `#/tutorial/${matchId}/simulate`;
+      } catch (error) {
+        if (note) note.textContent = error instanceof Error ? error.message : "Could not start simulation";
+      }
+    })();
+  });
+  document.querySelector("#tut-complete")?.addEventListener("click", () => { location.hash = `#/tutorial/${matchId}/complete`; });
+  document.querySelector("#tut-reset")?.addEventListener("click", () => {
+    void (async () => {
+      await api(`/v1/tutorial/matches/${matchId}/reset`, { method: "POST", body: "{}" });
+      state.teamVersionId = null;
+      location.hash = `#/tutorial/${matchId}`;
+      void render();
+    })();
+  });
+}
+
+let tutorialPoll: ReturnType<typeof setInterval> | null = null;
+function stopTutorialPoll(): void {
+  if (tutorialPoll) {
+    clearInterval(tutorialPoll);
+    tutorialPoll = null;
+  }
+}
+
+async function renderTutorialSimulate(matchId: string): Promise<void> {
+  setSelectedMode("DEMO");
+  stopTutorialPoll();
+  app.innerHTML = shell("Match Simulation", loading("Simulating…"));
+
+  const paint = async () => {
+    const status = await api<{
+      phase: string;
+      matchMinute: number;
+      period: string;
+      footballScore: { home: number; away: number };
+      completed: boolean;
+      running: boolean;
+      matchStatus: string;
+      recentSteps: Array<{ label?: string; eventType?: string; matchMinute?: number; coachTip?: { id: string; title: string; body: string } }>;
+      coachTips: Array<{ id: string; title: string; body: string }>;
+      elapsedMs: number;
+      durationMs: number;
+    }>(`/v1/tutorial/matches/${matchId}`);
+
+    const match = (await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO")).match;
+    let boardHtml = empty("Leaderboard updating…");
+    let pointsHtml = "";
+    try {
+      const contests = await apiForMode<{ contests: ContestCard[] }>(`/matches/${matchId}/contests`, "DEMO");
+      const free = contests.contests.find((c) => c.contestKind === "FREE");
+      if (free) {
+        const board = await api<{
+          leaderboard: Array<{ wallet: string; milliPoints: number; rank: number; scoreDelta?: number | null }>;
+        }>(`/contests/${free.contestId}/leaderboard`);
+        boardHtml = board.leaderboard.slice(0, 8).map((row) =>
+          `<div class="lb-row"><span>#${row.rank}</span><span>${escapeText(row.wallet.slice(0, 4) + "…" + row.wallet.slice(-4))}</span><strong>${(row.milliPoints / 1000).toFixed(1)}</strong></div>`
+        ).join("") || empty("No entries yet");
+        if (state.walletAddress) {
+          const mine = board.leaderboard.find((r) => r.wallet === state.walletAddress);
+          if (mine) pointsHtml = `<div class="sim-points">Your fantasy: <strong>${(mine.milliPoints / 1000).toFixed(1)}</strong> · Rank #${mine.rank}</div>`;
+        }
+      }
+    } catch { /* ignore */ }
+
+    const eventsHtml = status.recentSteps.map((s) =>
+      `<div class="sim-event"><span class="quiet">${s.matchMinute ?? ""}'</span> <strong>${escapeText(s.label || s.eventType || "Update")}</strong></div>`
+    ).join("") || `<div class="quiet">Waiting for kick-off…</div>`;
+
+    const dismissed = new Set((sessionStorage.getItem("kickr.tutorial.tips") ?? "").split(",").filter(Boolean));
+    const tips = status.coachTips.filter((t) => !dismissed.has(t.id));
+    const tipHtml = tips.slice(-1).map((t) =>
+      `<aside class="coach-tip" data-tip="${escapeText(t.id)}"><strong>${escapeText(t.title)}</strong><p>${escapeText(t.body)}</p><button type="button" class="ghost" data-dismiss-tip="${escapeText(t.id)}">Got it</button></aside>`
+    ).join("");
+
+    const pct = Math.min(100, Math.round((status.elapsedMs / Math.max(1, status.durationMs)) * 100));
+
+    app.innerHTML = shell("TUTORIAL MATCH · SIMULATED", `
+      <article class="card tutorial-card sim-card">
+        <div class="meta"><span class="badge badge-simulated">SIMULATED</span><span class="badge badge-live">${escapeText(status.phase)}</span><span class="quiet">${status.matchMinute}' · ${escapeText(status.period)}</span></div>
+        <div class="sim-scoreboard">
+          <div><strong>${escapeText(match.home.shortName)}</strong><div class="sim-score">${status.footballScore.home}</div></div>
+          <div class="sim-clock">${status.matchMinute}'</div>
+          <div><strong>${escapeText(match.away.shortName)}</strong><div class="sim-score">${status.footballScore.away}</div></div>
+        </div>
+        <div class="meter"><span style="width:${pct}%"></span></div>
+        ${pointsHtml}
+        ${tipHtml}
+        <h3>Event feed</h3>
+        <div class="sim-feed">${eventsHtml}</div>
+        <h3>Leaderboard</h3>
+        <div class="leaderboard">${boardHtml}</div>
+        <div class="row" style="margin-top:16px">
+          <a class="back-link" href="#/tutorial/${matchId}">← Tutorial</a>
+          ${status.completed ? `<button class="primary" id="tut-to-complete">See final result</button>` : `<span class="quiet">Auto-progressing…</span>`}
+        </div>
+      </article>
+    `);
+    document.querySelector("#tut-to-complete")?.addEventListener("click", () => {
+      location.hash = `#/tutorial/${matchId}/complete`;
+    });
+    for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-dismiss-tip]")) {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.dismissTip ?? "";
+        const cur = new Set((sessionStorage.getItem("kickr.tutorial.tips") ?? "").split(",").filter(Boolean));
+        cur.add(id);
+        sessionStorage.setItem("kickr.tutorial.tips", [...cur].join(","));
+        void paint();
+      });
+    }
+    if (status.completed) {
+      stopTutorialPoll();
+      location.hash = `#/tutorial/${matchId}/complete`;
+    }
+  };
+
+  try {
+    await api(`/v1/tutorial/matches/${matchId}/start`, { method: "POST", body: "{}" }).catch(() => api(`/v1/tutorial/matches/${matchId}/tick`, { method: "POST", body: "{}" }));
+  } catch { /* may already be running */ }
+  await paint();
+  tutorialPoll = setInterval(() => { void paint(); }, 1500);
+}
+
+async function renderTutorialComplete(matchId: string): Promise<void> {
+  setSelectedMode("DEMO");
+  stopTutorialPoll();
+  app.innerHTML = shell("Tutorial Complete", loading());
+  const match = (await apiForMode<{ match: MatchCard }>(`/matches/${matchId}`, "DEMO")).match;
+  const status = await api<{
+    footballScore: { home: number; away: number };
+    recentSteps: Array<{ label?: string; eventType?: string; matchMinute?: number }>;
+  }>(`/v1/tutorial/matches/${matchId}`);
+  let rankHtml = "";
+  let fantasy = "";
+  let boardHtml = "";
+  try {
+    const contests = await apiForMode<{ contests: ContestCard[] }>(`/matches/${matchId}/contests`, "DEMO");
+    const free = contests.contests.find((c) => c.contestKind === "FREE");
+    if (free) {
+      const board = await api<{
+        leaderboard: Array<{ wallet: string; milliPoints: number; rank: number }>;
+      }>(`/contests/${free.contestId}/leaderboard`);
+      boardHtml = board.leaderboard.map((row) =>
+        `<div class="lb-row"><span>#${row.rank}</span><span>${escapeText(row.wallet.slice(0, 4) + "…" + row.wallet.slice(-4))}</span><strong>${(row.milliPoints / 1000).toFixed(1)}</strong></div>`
+      ).join("");
+      const mine = board.leaderboard.find((r) => r.wallet === state.walletAddress);
+      if (mine) {
+        fantasy = `${(mine.milliPoints / 1000).toFixed(1)} pts`;
+        rankHtml = `Rank #${mine.rank}`;
+      }
+    }
+  } catch { /* ignore */ }
+  const keyEvents = status.recentSteps.filter((s) => s.eventType === "GOAL" || s.eventType === "VAR_REVERSAL" || s.eventType === "ASSIST" || s.label?.includes("VAR")).slice(-6);
+  const keyEventsHtml = keyEvents.map((s) => `<div class="sim-event">${s.matchMinute ?? ""}' ${escapeText(s.label || s.eventType || "")}</div>`).join("") || empty("No events");
+  app.innerHTML = shell("Tutorial Complete", `
+    <article class="card tutorial-card">
+      <div class="meta"><span class="tutorial-kicker">TUTORIAL COMPLETE</span><span class="badge badge-simulated">SIMULATED</span></div>
+      <h2>${escapeText(match.home.name)} ${status.footballScore.home}-${status.footballScore.away} ${escapeText(match.away.name)}</h2>
+      <p class="quiet">Final football score · ${escapeText(fantasy || "Fantasy scored")} · ${escapeText(rankHtml || "")}</p>
+      <h3>Key events</h3>
+      <div class="sim-feed">${keyEventsHtml}</div>
+      <h3>Contest leaderboard</h3>
+      <div class="leaderboard">${boardHtml || empty("No leaderboard")}</div>
+      <div class="row" style="margin-top:18px">
+        <button class="ghost" id="tut-reset2">Reset Tutorial</button>
+        <button class="primary" id="tut-upcoming">View Upcoming Matches</button>
+      </div>
+      <p class="note">Next up: Rangers vs Kilmarnock on the real Sportmonks fixture.</p>
+    </article>
+  `);
+  document.querySelector("#tut-upcoming")?.addEventListener("click", () => {
+    setSelectedMode("LIVE");
+    location.hash = "#/";
+  });
+  document.querySelector("#tut-reset2")?.addEventListener("click", () => {
+    void (async () => {
+      await api(`/v1/tutorial/matches/${matchId}/reset`, { method: "POST", body: "{}" });
+      location.hash = `#/tutorial/${matchId}`;
     })();
   });
 }

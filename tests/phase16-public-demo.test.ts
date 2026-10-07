@@ -47,7 +47,7 @@ const prodBase = {
 };
 
 describe("Phase 16 DEMO provider isolation", () => {
-  it("DEMO catalog is labeled DEMO DATA and never Sportmonks", () => {
+  it("DEMO catalog is labeled simulated/tutorial and never Sportmonks", () => {
     const demo = createDemoProvider();
     expect(demo.name).toBe(DEMO_PROVIDER_NAME);
     expect(demo.developmentOnly).toBe(false);
@@ -55,9 +55,9 @@ describe("Phase 16 DEMO provider isolation", () => {
     expect(catalog.matches.length).toBeGreaterThanOrEqual(3);
     for (const match of catalog.matches) {
       expect(match.dataSource.provider).toBe("demo");
-      expect(match.dataSource.label).toMatch(/DEMO DATA/i);
+      expect(match.dataSource.label).toMatch(/DEMO DATA|SIMULATED|Tutorial|fictional/i);
       expect(match.dataSource.label).toMatch(/not Sportmonks/i);
-      expect(match.competition).toMatch(/DEMO/i);
+      expect(match.competition).toMatch(/DEMO|Tutorial/i);
     }
     expect(catalog.events.every((e) => e.provider === "demo")).toBe(true);
     expect(JSON.stringify(catalog).toLowerCase()).not.toContain("api.sportmonks");

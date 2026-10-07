@@ -229,7 +229,7 @@ describe("Phase 18C bootstrap + positions", () => {
     const catalog = buildDemoSingleMatchCatalog();
     assertExactlyOneMatch(catalog, "DEMO");
     expect(createDemoSingleMatchProvider().catalog().matches).toHaveLength(1);
-    expect(catalog.matches[0]!.dataSource.label).toContain("DEMO DATA");
+    expect(catalog.matches[0]!.dataSource.label).toMatch(/DEMO DATA|SIMULATED|Tutorial|fictional/i);
   });
 });
 

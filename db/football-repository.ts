@@ -520,6 +520,53 @@ export function createPgFootballStore(db: Queryable): FootballStore {
         );
       }
     },
+    async resetTutorialMatch(matchId: string, catalog: SportsCatalog) {
+      await db.query(`SELECT kickr_reset_tutorial_match($1::uuid)`, [matchId]);
+      // Re-apply squad / labels from catalog (clubs/players already present).
+      for (const match of catalog.matches.filter((m) => m.id === matchId)) {
+        await db.query(
+          `UPDATE matches
+           SET competition = $2,
+               venue = $3,
+               status = $4,
+               lineup_available = $5,
+               data_source = $6::jsonb
+           WHERE id = $1
+             AND data_source->>'provider' = 'demo'`,
+          [
+            match.id,
+            match.competition,
+            match.venue,
+            match.status,
+            match.lineupAvailable,
+            JSON.stringify(match.dataSource),
+          ],
+        );
+      }
+      for (const row of catalog.squad.filter((s) => s.matchId === matchId)) {
+        await db.query(
+          `INSERT INTO match_squad (
+             id, match_id, player_id, club_id, fantasy_position, credit_value,
+             availability, starting_status, squad_status, provider_id, source_version, sourced_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            row.id,
+            row.matchId,
+            row.playerId,
+            row.clubId,
+            row.fantasyPosition,
+            row.creditValue,
+            row.availability,
+            row.startingStatus,
+            row.squadStatus,
+            row.providerId,
+            row.sourceVersion,
+            row.sourcedAt,
+          ],
+        );
+      }
+    },
   };
 }
 

@@ -140,7 +140,7 @@ describe("Phase 17.2 landing + consumer chrome", () => {
     expect(html).toContain("Private Leagues");
     expect(html).toContain("Why KICKR");
     expect(html).toContain("Technology");
-    expect(html).toContain("DEMO DATA");
+    expect(html).toMatch(/DEMO DATA|Tutorial Match|SIMULATED/);
     expect(html).toContain("FREE DEMO");
     expect(html).toContain("Solana");
     expect(html).not.toContain("Claim Prize");

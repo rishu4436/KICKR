@@ -111,6 +111,11 @@ export interface FootballStore {
   listTeamsByMatch(matchId: string): Promise<FantasyTeamRecord[]>;
   upsertSquadRow(row: SquadRecord): Promise<void>;
   upsertCatalog(catalog: SportsCatalog): Promise<void>;
+  /**
+   * Tutorial-only: reset a DEMO match to LINEUPS_AVAILABLE and clear its events.
+   * Refuses non-demo providers. Optional — PG + memory implement; callers guard.
+   */
+  resetTutorialMatch?(matchId: string, catalog: SportsCatalog): Promise<void>;
 }
 
 function clone<T>(value: T): T {
@@ -259,6 +264,29 @@ export class InMemoryFootballStore implements FootballStore {
     } else {
       this.squad.push(clone(row));
     }
+  }
+
+  async resetTutorialMatch(matchId: string, catalog: SportsCatalog): Promise<void> {
+    const match = this.matches.find((row) => row.id === matchId);
+    if (!match) {
+      throw new Error("match not found");
+    }
+    if (match.dataSource.provider !== "demo") {
+      throw new Error("resetTutorialMatch refuses non-demo matches");
+    }
+    this.clubs = catalog.clubs.map((club) => ({ ...club }));
+    this.players = catalog.players.map((player) => ({ ...player }));
+    const fromCatalog = catalog.matches.find((m) => m.id === matchId);
+    match.status = (fromCatalog?.status ?? "LINEUPS_AVAILABLE") as MatchState;
+    match.lineupAvailable = true;
+    match.competition = fromCatalog?.competition ?? match.competition;
+    match.venue = fromCatalog?.venue ?? match.venue;
+    match.dataSource = { ...(fromCatalog?.dataSource ?? match.dataSource) };
+    this.squad = [
+      ...this.squad.filter((row) => row.matchId !== matchId),
+      ...catalog.squad.filter((row) => row.matchId === matchId).map((row) => ({ ...row })),
+    ];
+    this.events = this.events.filter((event) => event.matchId !== matchId);
   }
 }
 

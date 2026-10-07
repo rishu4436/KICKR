@@ -24,6 +24,7 @@ import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
 import { registerDevE2eRoutes } from "./dev-e2e.js";
 import { registerDemoControlRoutes } from "./demo-control.js";
+import { registerTutorialRoutes } from "./tutorial.js";
 import { registerLeagueRoutes } from "./leagues.js";
 import { registerProfileRoutes } from "./profile.js";
 import { registerSharePages } from "./share-pages.js";
@@ -120,7 +121,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     if (origin && deps.config.server.origins.includes(origin)) {
       c.header("access-control-allow-origin", origin);
       c.header("vary", "Origin");
-      c.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id");
+      c.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id, x-kickr-mode, x-demo-control-token");
       c.header("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
     }
     if (c.req.method === "OPTIONS") {
@@ -372,6 +373,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
   registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
   registerDemoControlRoutes(app, deps);
+  registerTutorialRoutes(app, deps, (c) => authenticate(deps, c));
   registerLeagueRoutes(app, deps, (c) => authenticate(deps, c));
   registerProfileRoutes(app, deps, (c) => authenticate(deps, c));
   registerSharePages(app, deps);

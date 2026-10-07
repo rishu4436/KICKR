@@ -23,7 +23,7 @@ export const DEMO_MATCH_FINAL = LOCAL_DEV_MATCH_FINAL;
 
 const DEMO_SOURCE = {
   provider: DEMO_PROVIDER_NAME,
-  label: "DEMO DATA — fictional clubs/players, not Sportmonks, not a live feed",
+  label: "SIMULATED — Tutorial Match (fictional clubs/players, not Sportmonks, not a live feed)",
   fetchedAt: "2026-10-01T00:00:00.000Z",
 };
 
@@ -33,7 +33,7 @@ function remapEvent(event: ProviderEvent): ProviderEvent {
     provider: DEMO_PROVIDER_NAME,
     metadata: {
       ...event.metadata,
-      label: "DEMO DATA event — fictional, not a live feed",
+      label: "SIMULATED tutorial event — fictional, not a live feed",
       source: DEMO_PROVIDER_NAME,
       notSportmonks: true,
       demoData: true,
@@ -64,7 +64,7 @@ export function buildDemoCatalog(): SportsCatalog {
     })),
     matches: base.matches.map(remapMatch).map((m) => ({
       ...m,
-      competition: "DEMO Cup",
+      competition: "Tutorial Match",
       dataSource: DEMO_SOURCE,
     })),
     squad: base.squad.map((row) => ({
@@ -110,17 +110,26 @@ export function isDemoProviderName(name: string): boolean {
  */
 export function buildDemoSingleMatchCatalog(): SportsCatalog {
   const full = buildDemoCatalog();
-  const live = full.matches.find((m) => m.id === DEMO_MATCH_LIVE) ?? full.matches[0];
-  if (!live) {
+  // Tutorial Match starts buildable (LINEUPS_AVAILABLE). Simulation advances it.
+  const upcoming = full.matches.find((m) => m.id === DEMO_MATCH_UPCOMING) ?? full.matches[0];
+  if (!upcoming) {
     throw new Error("DEMO catalog has no matches");
   }
-  const matchId = live.id;
+  const matchId = upcoming.id;
   return {
     clubs: full.clubs,
     players: full.players,
-    matches: [{ ...live, dataSource: { ...DEMO_SOURCE, fetchedAt: live.dataSource.fetchedAt } }],
+    matches: [{
+      ...upcoming,
+      competition: "Tutorial Match",
+      venue: "Tutorial Pitch — simulated",
+      status: "LINEUPS_AVAILABLE",
+      lineupAvailable: true,
+      dataSource: { ...DEMO_SOURCE, fetchedAt: upcoming.dataSource.fetchedAt },
+    }],
     squad: full.squad.filter((row) => row.matchId === matchId),
-    events: full.events.filter((event) => event.matchId === matchId),
+    // Empty: simulation injects a deterministic event script on Start.
+    events: [],
   };
 }
 

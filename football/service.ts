@@ -30,6 +30,9 @@ export interface MatchView {
   bucket: MatchBucket;
   externalFixtureId: string;
   dataSource: MatchRecord["dataSource"];
+  /** True when provider is demo — Tutorial Match / simulated. Never true for Sportmonks. */
+  simulated: boolean;
+  tutorial: boolean;
   home: { id: string; name: string; shortName: string };
   away: { id: string; name: string; shortName: string };
 }
@@ -397,6 +400,8 @@ export class FootballService {
       bucket: matchBucket(match.status),
       externalFixtureId: match.externalFixtureId,
       dataSource: match.dataSource,
+      simulated: match.dataSource.provider === "demo",
+      tutorial: match.dataSource.provider === "demo",
       home: { id: home.id, name: home.name, shortName: home.shortName },
       away: { id: away.id, name: away.name, shortName: away.shortName },
     };
