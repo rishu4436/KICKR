@@ -9,6 +9,8 @@ export function modeFromDataSource(provider: string | null | undefined): DataMod
   const n = (provider ?? "").trim().toLowerCase().replace(/_/g, "-");
   if (n === "sportmonks") return "LIVE";
   if (n === "demo") return "DEMO";
+  // operator-managed fixtures are a third provenance (OPERATOR_MANAGED) — never mixed into LIVE/DEMO.
+  if (n === "operator") return null;
   return null;
 }
 

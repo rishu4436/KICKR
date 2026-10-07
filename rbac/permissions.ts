@@ -17,6 +17,7 @@ export const PERMISSIONS = [
   "READ_AUDIT",
   "MANAGE_MATCH_CONFIG",
   "MANAGE_CONTEST_CONFIG",
+  "MANAGE_MATCH_OPERATIONS",
   "REVIEW_RESULT",
   "RUN_SCORING",
   "RUN_SETTLEMENT",
@@ -80,6 +81,13 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
     group: "OPERATE",
     touchesEscrow: false,
     description: "Manage contest configuration. Does not settle or move funds.",
+  },
+  {
+    code: "MANAGE_MATCH_OPERATIONS",
+    group: "OPERATE",
+    touchesEscrow: false,
+    description:
+      "Private Match Ops: operator fixtures, credits, confirmed live events. Not granted to Support/UI/Product. Does not settle or move funds.",
   },
   {
     code: "REVIEW_RESULT",

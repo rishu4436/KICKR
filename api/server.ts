@@ -22,6 +22,7 @@ import { registerContestRoutes } from "./contests.js";
 import { registerLiveRoutes } from "./live.js";
 import { registerSettlementRoutes } from "./settlement.js";
 import { registerOpsRoutes } from "./ops.js";
+import { registerMatchOpsRoutes } from "./match-ops.js";
 import { registerDevE2eRoutes } from "./dev-e2e.js";
 import { registerDemoControlRoutes } from "./demo-control.js";
 import { registerTutorialRoutes } from "./tutorial.js";
@@ -371,6 +372,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     (c, permission) => requirePermission(deps, c, permission),
   );
   registerOpsRoutes(app, deps, (c) => authenticate(deps, c));
+  registerMatchOpsRoutes(app, deps, (c) => authenticate(deps, c));
   registerDevE2eRoutes(app, deps, (c) => authenticate(deps, c));
   registerDemoControlRoutes(app, deps);
   registerTutorialRoutes(app, deps, (c) => authenticate(deps, c));
@@ -383,6 +385,9 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     app.get("/", serveStatic({ root: deps.clientDir, path: "index.html" }));
     app.get("/ops", serveStatic({ root: deps.clientDir, path: "ops.html" }));
     app.get("/ops/", serveStatic({ root: deps.clientDir, path: "ops.html" }));
+    app.get("/ops/matches", serveStatic({ root: deps.clientDir, path: "match-ops.html" }));
+    app.get("/ops/matches/", serveStatic({ root: deps.clientDir, path: "match-ops.html" }));
+    app.get("/ops/matches/*", serveStatic({ root: deps.clientDir, path: "match-ops.html" }));
   }
 
   return app;

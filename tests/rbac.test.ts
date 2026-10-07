@@ -88,8 +88,16 @@ describe("rbac matrix", () => {
       path.resolve(process.cwd(), "migrations/001_phase1_identity_rbac_audit.sql"),
       "utf8",
     );
+    const sql19 = readFileSync(
+      path.resolve(process.cwd(), "migrations/019_phase18d2_match_operations.sql"),
+      "utf8",
+    );
     for (const permission of PERMISSIONS) {
-      expect(sql).toContain(`'${permission}'`);
+      if (permission === "MANAGE_MATCH_OPERATIONS") {
+        expect(sql19).toContain(`'${permission}'`);
+      } else {
+        expect(sql).toContain(`'${permission}'`);
+      }
     }
     for (const role of ROLES) {
       expect(sql).toContain(`'${role}'`);

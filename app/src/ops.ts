@@ -532,3 +532,5 @@ function draw(): void {
 }
 
 draw();
+
+export {};

@@ -15,7 +15,7 @@ The parenthetical headcounts in the Phase 1 brief are planned staffing, not sche
 | Group | Permissions |
 | --- | --- |
 | READ | `READ_SYSTEM`, `READ_CONTEST`, `READ_USER_HISTORY`, `READ_AUDIT` |
-| OPERATE | `WRITE_SUPPORT_NOTE`, `MANAGE_MATCH_CONFIG`, `MANAGE_CONTEST_CONFIG`, `RUN_SCORING`, `RUN_SETTLEMENT` |
+| OPERATE | `WRITE_SUPPORT_NOTE`, `MANAGE_MATCH_CONFIG`, `MANAGE_CONTEST_CONFIG`, `MANAGE_MATCH_OPERATIONS`, `RUN_SCORING`, `RUN_SETTLEMENT` |
 | APPROVE | `REVIEW_RESULT` |
 | ADMINISTER | `MANAGE_RBAC`, `MANAGE_SYSTEM` |
 
@@ -25,8 +25,8 @@ TODO: classifying `MANAGE_MATCH_CONFIG` and `MANAGE_CONTEST_CONFIG` as OPERATE r
 
 | Principal | Permissions |
 | --- | --- |
-| CEO_HEAD (headcount 1, not enforced) | `MANAGE_RBAC`, `MANAGE_SYSTEM`, `READ_SYSTEM`, `READ_AUDIT`, `READ_CONTEST` |
-| BACKEND_DEVELOPER (1) | `READ_SYSTEM`, `MANAGE_MATCH_CONFIG`, `MANAGE_CONTEST_CONFIG`, `RUN_SCORING` |
+| CEO_HEAD (headcount 1, not enforced) | `MANAGE_RBAC`, `MANAGE_SYSTEM`, `READ_SYSTEM`, `READ_AUDIT`, `READ_CONTEST`, `MANAGE_MATCH_OPERATIONS` |
+| BACKEND_DEVELOPER (1) | `READ_SYSTEM`, `MANAGE_MATCH_CONFIG`, `MANAGE_CONTEST_CONFIG`, `RUN_SCORING`, `MANAGE_MATCH_OPERATIONS` |
 | APP_DEVELOPER (2) | `READ_SYSTEM`, `READ_CONTEST` |
 | TESTER (1) | `READ_SYSTEM`, `READ_CONTEST` |
 | PRODUCT_MANAGER (1) | `READ_SYSTEM`, `READ_CONTEST`, `MANAGE_CONTEST_CONFIG`, `MANAGE_MATCH_CONFIG` |
@@ -55,3 +55,8 @@ Not granted to any human role:
 - `WRITE_SUPPORT_NOTE` has no storage table yet. The permission must not be treated as permission to edit scores, winners, audit, or money.
 - No audit event was specified for role changes, so there is no HTTP API that grants roles. Inserts are operational SQL until an audited admin flow exists. That flow is not built in Phase 1.
 - `MANAGE_SYSTEM` and `MANAGE_RBAC` have no mutation endpoints in Phase 1.
+
+
+## Phase 18D.2 Match Operations
+
+`MANAGE_MATCH_OPERATIONS` powers the private `/ops/matches` surface (operator-managed fixtures, credits, confirmed live events). Granted only to **CEO_HEAD** and **BACKEND_DEVELOPER**. Support, UI/UX, and Product do **not** receive write access. Operator data provenance is `OPERATOR_MANAGED` and must never be labeled as Sportmonks. Grok may propose events; only a human confirmation publishes into `match_events` → LIVE_V1.

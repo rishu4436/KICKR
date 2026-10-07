@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         main: path.resolve(root, "index.html"),
         ops: path.resolve(root, "ops.html"),
+        "match-ops": path.resolve(root, "match-ops.html"),
       },
     },
   },

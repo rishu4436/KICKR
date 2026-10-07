@@ -31,7 +31,7 @@ export interface MatchRecord {
   externalFixtureId: string;
   status: MatchState;
   lineupAvailable: boolean;
-  dataSource: { provider: string; label: string; fetchedAt: string };
+  dataSource: { provider: string; label: string; fetchedAt: string; provenance?: string };
 }
 
 export interface SquadRecord {
@@ -116,7 +116,16 @@ export interface FootballStore {
    * Refuses non-demo providers. Optional — PG + memory implement; callers guard.
    */
   resetTutorialMatch?(matchId: string, catalog: SportsCatalog): Promise<void>;
+  /** Phase 18D.2 Match Ops mutations (operator-managed fixtures only). */
+  upsertClub?(club: ClubRecord): Promise<void>;
+  upsertPlayer?(player: PlayerRecord): Promise<void>;
+  upsertMatch?(match: MatchRecord): Promise<void>;
+  updateMatchFields?(
+    id: string,
+    patch: Partial<Pick<MatchRecord, "competition" | "venue" | "kickoffAt" | "status" | "lineupAvailable" | "dataSource" | "homeClubId" | "awayClubId">>,
+  ): Promise<MatchRecord>;
 }
+
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -264,6 +273,42 @@ export class InMemoryFootballStore implements FootballStore {
     } else {
       this.squad.push(clone(row));
     }
+  }
+
+  async upsertClub(club: ClubRecord): Promise<void> {
+    const index = this.clubs.findIndex((row) => row.id === club.id);
+    if (index >= 0) this.clubs[index] = { ...club };
+    else this.clubs.push({ ...club });
+  }
+
+  async upsertPlayer(player: PlayerRecord): Promise<void> {
+    const index = this.players.findIndex((row) => row.id === player.id);
+    if (index >= 0) this.players[index] = { ...player };
+    else this.players.push({ ...player });
+  }
+
+  async upsertMatch(match: MatchRecord): Promise<void> {
+    const index = this.matches.findIndex((row) => row.id === match.id);
+    const copy = { ...match, dataSource: { ...match.dataSource } };
+    if (index >= 0) this.matches[index] = copy;
+    else this.matches.push(copy);
+  }
+
+  async updateMatchFields(
+    id: string,
+    patch: Partial<Pick<MatchRecord, "competition" | "venue" | "kickoffAt" | "status" | "lineupAvailable" | "dataSource" | "homeClubId" | "awayClubId">>,
+  ): Promise<MatchRecord> {
+    const match = this.matches.find((row) => row.id === id);
+    if (!match) throw new Error("match not found");
+    if (patch.competition !== undefined) match.competition = patch.competition;
+    if (patch.venue !== undefined) match.venue = patch.venue;
+    if (patch.kickoffAt !== undefined) match.kickoffAt = patch.kickoffAt;
+    if (patch.status !== undefined) match.status = patch.status;
+    if (patch.lineupAvailable !== undefined) match.lineupAvailable = patch.lineupAvailable;
+    if (patch.homeClubId !== undefined) match.homeClubId = patch.homeClubId;
+    if (patch.awayClubId !== undefined) match.awayClubId = patch.awayClubId;
+    if (patch.dataSource !== undefined) match.dataSource = { ...patch.dataSource };
+    return clone(match);
   }
 
   async resetTutorialMatch(matchId: string, catalog: SportsCatalog): Promise<void> {

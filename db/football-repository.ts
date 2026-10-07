@@ -567,6 +567,80 @@ export function createPgFootballStore(db: Queryable): FootballStore {
         );
       }
     },
+
+    async upsertClub(club) {
+      await db.query(
+        `INSERT INTO clubs (id, name, short_name, provider_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           short_name = EXCLUDED.short_name,
+           provider_id = EXCLUDED.provider_id,
+           updated_at = now()`,
+        [club.id, club.name, club.shortName, club.providerId],
+      );
+    },
+    async upsertPlayer(player) {
+      await db.query(
+        `INSERT INTO players (id, display_name, short_name, position, club_id, active, provider_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           display_name = EXCLUDED.display_name,
+           short_name = EXCLUDED.short_name,
+           position = EXCLUDED.position,
+           club_id = EXCLUDED.club_id,
+           active = EXCLUDED.active,
+           provider_id = EXCLUDED.provider_id,
+           updated_at = now()`,
+        [player.id, player.displayName, player.shortName, player.position, player.clubId, player.active, player.providerId],
+      );
+    },
+    async upsertMatch(match) {
+      await db.query(
+        `INSERT INTO matches (
+           id, home_club_id, away_club_id, kickoff_at, competition, venue,
+           external_fixture_id, status, lineup_available, data_source, created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb, now(), now())
+         ON CONFLICT (id) DO UPDATE SET
+           home_club_id = EXCLUDED.home_club_id,
+           away_club_id = EXCLUDED.away_club_id,
+           kickoff_at = EXCLUDED.kickoff_at,
+           competition = EXCLUDED.competition,
+           venue = EXCLUDED.venue,
+           external_fixture_id = EXCLUDED.external_fixture_id,
+           status = EXCLUDED.status,
+           lineup_available = EXCLUDED.lineup_available,
+           data_source = EXCLUDED.data_source,
+           updated_at = now()`,
+        [
+          match.id, match.homeClubId, match.awayClubId, match.kickoffAt, match.competition,
+          match.venue, match.externalFixtureId, match.status, match.lineupAvailable,
+          JSON.stringify(match.dataSource),
+        ],
+      );
+    },
+    async updateMatchFields(id, patch) {
+      const current = await this.getMatch(id);
+      if (!current) throw new Error("match not found");
+      const next = {
+        ...current,
+        ...patch,
+        dataSource: patch.dataSource ? { ...patch.dataSource } : current.dataSource,
+      };
+      await db.query(
+        `UPDATE matches SET
+           home_club_id = $2, away_club_id = $3, kickoff_at = $4, competition = $5, venue = $6,
+           status = $7, lineup_available = $8, data_source = $9::jsonb, updated_at = now()
+         WHERE id = $1`,
+        [
+          id, next.homeClubId, next.awayClubId, next.kickoffAt, next.competition, next.venue,
+          next.status, next.lineupAvailable, JSON.stringify(next.dataSource),
+        ],
+      );
+      const updated = await this.getMatch(id);
+      if (!updated) throw new Error("match not found after update");
+      return updated;
+    },
   };
 }
 
