@@ -7,7 +7,7 @@ import { LiveScoreCache } from "./cache.js";
 import { LiveScoreHub } from "./hub.js";
 import { LiveMetrics } from "./metrics.js";
 import { LiveScoringPipeline, type ContestScoringSource, type LivePipelineStore } from "./pipeline.js";
-import { DEV_V1_RULESET, DEV_V1_SCALE } from "../domain/scoring/dev-v1.js";
+import { DEV_V1_RULESET, DEV_V1_SCALE, type ScoringRuleset } from "../domain/scoring/dev-v1.js";
 import { derivePitchStates, type LineupSeed } from "./lineup.js";
 import {
   computeScoreSnapshotId,
@@ -31,6 +31,7 @@ export class LiveScoringService {
     audit: AuditStore,
     providerName: string,
     contestSource: ContestScoringSource | null = null,
+    ruleset: ScoringRuleset = DEV_V1_RULESET,
   ) {
     this.cache = new LiveScoreCache(redis, env);
     this.hub = new LiveScoreHub();
@@ -45,7 +46,12 @@ export class LiveScoringService {
       audit,
       providerName,
       contestSource,
+      ruleset,
     );
+  }
+
+  getRuleset(): ScoringRuleset {
+    return this.pipeline.getRuleset();
   }
 
   async getMatchLive(matchId: string, ctx: RequestContext) {
@@ -66,8 +72,8 @@ export class LiveScoringService {
           eventCount: rebuilt.eventCount,
           providerName: this.metrics.snapshot().providerName,
           playerScores: rebuilt.playerScores,
-          scale: DEV_V1_SCALE,
-          ruleset: { name: DEV_V1_RULESET.name, status: DEV_V1_RULESET.status },
+          scale: this.pipeline.getRuleset().scale,
+          ruleset: { name: this.pipeline.getRuleset().name, status: this.pipeline.getRuleset().status },
           scoreSnapshotId: expected.scoreSnapshotId,
           dataHealth: {
             connected: rebuilt.freshness !== "DATA_ERROR",
@@ -91,8 +97,8 @@ export class LiveScoringService {
       eventCount: cached.eventCount,
       providerName: cached.providerName,
       playerScores: cached.playerScores,
-      scale: DEV_V1_SCALE,
-      ruleset: { name: DEV_V1_RULESET.name, status: DEV_V1_RULESET.status },
+      scale: this.pipeline.getRuleset().scale,
+      ruleset: { name: this.pipeline.getRuleset().name, status: this.pipeline.getRuleset().status },
       scoreSnapshotId: cached.scoreSnapshotId ?? expected.scoreSnapshotId,
       dataHealth: {
         connected: cached.freshness !== "DATA_ERROR",

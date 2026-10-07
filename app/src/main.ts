@@ -278,6 +278,7 @@ const state: {
   error: string | null;
   environment: string | null;
   demoData: boolean;
+  liveData: boolean;
 } = {
   token: sessionStorage.getItem("kickr.session.token") ?? sessionStorage.getItem("kickr.dev.token"),
   authMode: (sessionStorage.getItem("kickr.auth.mode") as "dev" | "wallet" | null) ?? (sessionStorage.getItem("kickr.dev.token") ? "dev" : null),
@@ -299,6 +300,7 @@ const state: {
   error: null,
   environment: null,
   demoData: false,
+  liveData: false,
 };
 
 let devDepositKey: Keypair | null = null;
@@ -364,17 +366,24 @@ async function runtimeEnvironment(): Promise<string> {
     const body = await (await fetch("/v1/config/public")).json() as {
       environment?: string;
       demoData?: boolean;
+      liveData?: boolean;
+      appMode?: string | null;
     };
     state.environment = body.environment ?? "development";
     state.demoData = body.demoData === true;
+    state.liveData = body.liveData === true || body.appMode === "LIVE";
   } catch {
     state.environment = "development";
     state.demoData = false;
+    state.liveData = false;
   }
   return state.environment;
 }
 
 function demoBannerHtml(): string {
+  if (state.liveData) {
+    return `<div class="demo-banner demo-banner-chip live-data-chip" role="status">LIVE DATA · Sportmonks match feed</div>`;
+  }
   if (!state.demoData) return "";
   return `<div class="demo-banner demo-banner-chip" role="status">DEMO DATA · Fictional match data</div>`;
 }

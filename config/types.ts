@@ -23,6 +23,9 @@ export const PUBLIC_CONFIG_KEYS = [
   "sportsProvider",
   "liveProviderConfigured",
   "demoData",
+  "appMode",
+  "liveData",
+  "liveFixtureId",
 ] as const;
 
 export type PublicConfigKey = (typeof PUBLIC_CONFIG_KEYS)[number];
@@ -44,6 +47,12 @@ export interface PublicConfig {
   liveProviderConfigured: boolean;
   /** True when the active catalog is DEMO DATA (fictional, production-demo safe). */
   demoData: boolean;
+  /** APP_MODE when set: LIVE | DEMO. Null when unset (legacy). */
+  appMode: "LIVE" | "DEMO" | null;
+  /** True when APP_MODE=LIVE (real Sportmonks). Mutually exclusive with demoData. */
+  liveData: boolean;
+  /** Public fixture id when LIVE (never the API key). Null otherwise. */
+  liveFixtureId: string | null;
 }
 
 export interface ServerConfig {
@@ -78,6 +87,12 @@ export interface ServerConfig {
     demoSeedEnabled: boolean;
     /** Raw DEMO_CONTROL_TOKEN; empty disables control. Never expose publicly. */
     demoControlToken: string;
+    /** APP_MODE when set. */
+    appMode: "LIVE" | "DEMO" | null;
+    /** LIVE_FIXTURE_ID when APP_MODE=LIVE. */
+    liveFixtureId: string | null;
+    /** Active scoring ruleset name (DEV_V1 | LIVE_V1). */
+    scoringRuleset: string;
   };
   fantasy: {
     creditCap: number;

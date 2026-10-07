@@ -1,5 +1,5 @@
 import type { Logger } from "../shared/logger.js";
-import { createDemoProvider, DEMO_PROVIDER_NAME } from "./demo-provider.js";
+import { createDemoProvider, createDemoSingleMatchProvider, DEMO_PROVIDER_NAME } from "./demo-provider.js";
 import { createLocalDevProvider, createSportsProvider as createCatalogProvider } from "./local-dev-provider.js";
 import { normalizeSportsProvider, type SportsProviderName } from "./provider-names.js";
 import {
@@ -26,6 +26,9 @@ export interface SportsRuntimeConfig {
   pollIntervalMs: number;
   requestTimeoutMs: number;
   logger?: Logger;
+  /** When APP_MODE=DEMO, catalog is exactly one fictional match. */
+  appMode?: "LIVE" | "DEMO" | null;
+  liveFixtureId?: string | null;
 }
 
 export interface SportsRuntime {
@@ -36,14 +39,17 @@ export interface SportsRuntime {
   liveConfigured: boolean;
   liveAdapter: ReturnType<typeof createSportmonksSportsProvider> | null;
   pollIntervalMs: number;
+  liveFixtureId: string | null;
+  appMode: "LIVE" | "DEMO" | null;
 }
 
 function resolveCatalog(
   provider: SportsProviderName,
   legacyDataProvider: string,
+  appMode: "LIVE" | "DEMO" | null | undefined,
 ): SportsDataProvider | null {
   if (provider === "demo") {
-    return createDemoProvider();
+    return appMode === "DEMO" ? createDemoSingleMatchProvider() : createDemoProvider();
   }
   if (provider === "local-dev") {
     return createLocalDevProvider();
@@ -62,7 +68,7 @@ function resolveCatalog(
 
 export function resolveSportsRuntime(config: SportsRuntimeConfig): SportsRuntime {
   const sportsProvider = normalizeSportsProvider(config.sportsProvider);
-  const catalogProvider = resolveCatalog(sportsProvider, config.dataProvider);
+  const catalogProvider = resolveCatalog(sportsProvider, config.dataProvider, config.appMode);
 
   if (sportsProvider === "sportmonks") {
     const liveConfigured = isLiveProviderConfigured({
@@ -82,6 +88,8 @@ export function resolveSportsRuntime(config: SportsRuntimeConfig): SportsRuntime
       liveConfigured,
       liveAdapter,
       pollIntervalMs: config.pollIntervalMs,
+      liveFixtureId: config.liveFixtureId ?? null,
+      appMode: config.appMode ?? null,
     };
   }
 
@@ -92,6 +100,8 @@ export function resolveSportsRuntime(config: SportsRuntimeConfig): SportsRuntime
     liveConfigured: false,
     liveAdapter: null,
     pollIntervalMs: config.pollIntervalMs,
+    liveFixtureId: config.liveFixtureId ?? null,
+    appMode: config.appMode ?? null,
   };
 }
 

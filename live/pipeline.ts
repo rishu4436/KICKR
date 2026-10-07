@@ -1,5 +1,5 @@
 import type { AuditStore } from "../audit/types.js";
-import { DEV_V1_RULESET } from "../domain/scoring/dev-v1.js";
+import { DEV_V1_RULESET, type ScoringRuleset } from "../domain/scoring/dev-v1.js";
 import {
   calculatePlayerPoints,
   calculateTeamPoints,
@@ -128,7 +128,12 @@ export class LiveScoringPipeline {
     private readonly audit: AuditStore,
     private readonly providerName: string,
     private readonly contestSource: ContestScoringSource | null = null,
+    private readonly ruleset: ScoringRuleset = DEV_V1_RULESET,
   ) {}
+
+  getRuleset(): ScoringRuleset {
+    return this.ruleset;
+  }
 
   getUnresolved(): UnresolvedProviderEvent[] {
     return this.unresolved.map((row) => ({ ...row, rawPayload: { ...row.rawPayload } }));
@@ -451,7 +456,7 @@ export class LiveScoringPipeline {
 
     const playerScores = [...affectedPlayerIds].sort().map((playerId) => ({
       playerId,
-      baseMilliPoints: calculatePlayerPoints(scoringEvents, playerId, DEV_V1_RULESET, matchContext, "player"),
+      baseMilliPoints: calculatePlayerPoints(scoringEvents, playerId, this.ruleset, matchContext, "player"),
     }));
 
     // Personal current-team scores (latest version) — not used for contest leaderboards.
@@ -466,7 +471,7 @@ export class LiveScoringPipeline {
       const scored = calculateTeamPoints(
         scoringEvents,
         { playerIds: latest.playerIds, captainId: latest.captainId, viceId: latest.viceId },
-        DEV_V1_RULESET,
+        this.ruleset,
         matchContext,
       );
       const cacheRow: TeamLiveScoreCache = {
@@ -514,7 +519,7 @@ export class LiveScoringPipeline {
       const scored = calculateTeamPoints(
         scoringEvents,
         { playerIds: version.playerIds, captainId: version.captainId, viceId: version.viceId },
-        DEV_V1_RULESET,
+        this.ruleset,
         matchContext,
       );
       const cacheRow: TeamLiveScoreCache & {
@@ -694,7 +699,7 @@ export class LiveScoringPipeline {
         eventCount: events.length,
         personalTeamCount: personalTeamScores.length,
         contestEntryCount: contestEntryScores.length,
-        ruleset: DEV_V1_RULESET.name,
+        ruleset: this.ruleset.name,
         triggerEventId: triggerEvent?.eventId ?? null,
       },
       actorAccountId: null,

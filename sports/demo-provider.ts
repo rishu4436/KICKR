@@ -102,3 +102,45 @@ export function isDemoProviderName(name: string): boolean {
   const n = name.trim().toLowerCase().replace(/_/g, "-");
   return n === "demo";
 }
+
+
+/**
+ * Phase 18C APP_MODE=DEMO: expose exactly one fictional match (the live demo fixture).
+ * Never mixes Sportmonks / LIVE DATA.
+ */
+export function buildDemoSingleMatchCatalog(): SportsCatalog {
+  const full = buildDemoCatalog();
+  const live = full.matches.find((m) => m.id === DEMO_MATCH_LIVE) ?? full.matches[0];
+  if (!live) {
+    throw new Error("DEMO catalog has no matches");
+  }
+  const matchId = live.id;
+  return {
+    clubs: full.clubs,
+    players: full.players,
+    matches: [{ ...live, dataSource: { ...DEMO_SOURCE, fetchedAt: live.dataSource.fetchedAt } }],
+    squad: full.squad.filter((row) => row.matchId === matchId),
+    events: full.events.filter((event) => event.matchId === matchId),
+  };
+}
+
+export function createDemoSingleMatchProvider(): SportsDataProvider {
+  const data = buildDemoSingleMatchCatalog();
+  return {
+    name: DEMO_PROVIDER_NAME,
+    developmentOnly: false,
+    catalog: () => data,
+    async listMatches() {
+      return data.matches;
+    },
+    async getMatch(id: string) {
+      return data.matches.find((match) => match.id === id) ?? null;
+    },
+    async getSquad(matchId: string) {
+      return data.squad.filter((row) => row.matchId === matchId);
+    },
+    async getEvents(matchId: string) {
+      return data.events.filter((event) => event.matchId === matchId);
+    },
+  };
+}

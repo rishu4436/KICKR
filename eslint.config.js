@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "scripts/demo-ui-smoke.mjs"],
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "scripts/demo-ui-smoke.mjs", "scripts/p173-setup-session.ts"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

@@ -286,3 +286,32 @@ export function sportmonksFixtureToRawEvents(fixture: {
   }
   return rows;
 }
+
+
+/** Process events strictly by provider sort_order, then minute, then id. */
+export function sortRawEventsByProviderOrder(rows: RawProviderEvent[]): RawProviderEvent[] {
+  return rows.slice().sort((a, b) => {
+    const sa = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const sb = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    if (sa !== sb) return sa - sb;
+    const ma = a.minute ?? 0;
+    const mb = b.minute ?? 0;
+    if (ma !== mb) return ma - mb;
+    return String(a.providerEventId).localeCompare(String(b.providerEventId));
+  });
+}
+
+/** Normalize a fixture event list in provider chronological order. */
+export function normalizeSportmonksFixtureEvents(
+  fixture: {
+    id: number | string;
+    events?: Array<Record<string, unknown>>;
+    timeline?: Array<Record<string, unknown>>;
+    starting_at?: string;
+  },
+  providerVersion: string | null = SPORTMONKS_API_VERSION,
+): NormalizedEventDraft[] {
+  const raw = sortRawEventsByProviderOrder(sportmonksFixtureToRawEvents(fixture));
+  const kickoffAt = fixture.starting_at ?? null;
+  return raw.map((row, index) => normalizeSportmonksEvent(row, index + 1, providerVersion, kickoffAt));
+}

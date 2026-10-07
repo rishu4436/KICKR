@@ -8,6 +8,7 @@ import {
   normalizeSportsProvider,
   type SportsProviderName,
 } from "../sports/provider-names.js";
+import { normalizeAppMode, resolveAppMode, AppModeError } from "../sports/app-mode.js";
 import { ConfigError } from "../shared/errors.js";
 import { envSchema } from "./schema.js";
 import type { AppConfig, PublicConfig } from "./types.js";
@@ -33,10 +34,35 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     throw new ConfigError(error instanceof Error ? error.message : "Invalid SPORTS_PROVIDER");
   }
 
+  let appModeResolved;
+  try {
+    const appMode = normalizeAppMode(data.APP_MODE);
+    appModeResolved = resolveAppMode({
+      appMode,
+      liveFixtureId: data.LIVE_FIXTURE_ID || null,
+      sportsProvider,
+      sportsApiKey: data.SPORTS_API_KEY,
+    });
+  } catch (error) {
+    const message =
+      error instanceof AppModeError || error instanceof Error ? error.message : "Invalid APP_MODE";
+    throw new ConfigError(message);
+  }
+
+  // APP_MODE forces the effective sports provider — never silently cross LIVE/DEMO.
+  if (appModeResolved.effectiveSportsProvider) {
+    sportsProvider = appModeResolved.effectiveSportsProvider;
+  }
+
   // Resolve catalog name for public/config consumers.
   const catalogName = resolveCatalogName(sportsProvider, data.SPORTS_DATA_PROVIDER);
   const liveProviderConfigured =
     sportsProvider === "sportmonks" && Boolean(data.SPORTS_API_KEY && data.SPORTS_API_KEY.trim());
+  const demoData =
+    appModeResolved.appMode === "DEMO" ||
+    (appModeResolved.appMode === null && (sportsProvider === "demo" || catalogName === "demo"));
+  const liveData = appModeResolved.appMode === "LIVE" || (appModeResolved.appMode === null && liveProviderConfigured);
+  const scoringRuleset = liveData || sportsProvider === "sportmonks" ? "LIVE_V1" : "DEV_V1";
 
   const publicConfig: PublicConfig = {
     appName: "KICKR",
@@ -49,7 +75,10 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     sportsDataProvider: catalogName,
     sportsProvider,
     liveProviderConfigured,
-    demoData: sportsProvider === "demo" || catalogName === "demo",
+    demoData,
+    appMode: appModeResolved.appMode,
+    liveData: liveData && !demoData,
+    liveFixtureId: appModeResolved.liveFixtureId,
   };
 
   assertPublicConfigShape(publicConfig);
@@ -89,6 +118,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
         liveProviderConfigured,
         demoSeedEnabled: data.DEMO_SEED_ENABLED,
         demoControlToken: data.DEMO_CONTROL_TOKEN,
+        appMode: appModeResolved.appMode,
+        liveFixtureId: appModeResolved.liveFixtureId,
+        scoringRuleset,
       },
       fantasy: {
         creditCap: data.FANTASY_CREDIT_CAP,

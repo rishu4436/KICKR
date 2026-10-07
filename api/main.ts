@@ -10,6 +10,11 @@ import { ContestDiscoveryCache } from "../contests/discovery.js";
 import { ContestService } from "../contests/service.js";
 import { createPgFreeResultStore } from "../contests/free/pg-store.js";
 import { resolveSportsRuntime } from "../sports/factory.js";
+import { LIVE_V1_RULESET } from "../domain/scoring/live-v1.js";
+import { DEV_V1_RULESET } from "../domain/scoring/dev-v1.js";
+import { bootstrapLiveFixture, assertExactlyOneMatch } from "../sports/live-bootstrap.js";
+import { createPgPlayerStatObservationStore } from "../db/player-stat-observations.js";
+
 import { InMemoryProviderIdMap, loadProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
 import { createPgProviderIdMapRepository } from "../db/provider-id-map.js";
 import { createCombinedScoringSource } from "../live/combined-scoring-source.js";
@@ -72,11 +77,19 @@ const sportsRuntime = resolveSportsRuntime({
   pollIntervalMs: config.server.sportsData.pollIntervalSeconds * 1000,
   requestTimeoutMs: config.server.sportsData.requestTimeoutMs,
   logger,
+  appMode: config.server.sportsData.appMode,
+  liveFixtureId: config.server.sportsData.liveFixtureId,
 });
+const activeRuleset =
+  config.server.sportsData.scoringRuleset === "LIVE_V1" ? LIVE_V1_RULESET : DEV_V1_RULESET;
 const sports = sportsRuntime.catalogProvider;
 // Seed fictional catalog for LOCAL_DEV (dev) and DEMO (production-demo safe).
 if (sports && (sports.developmentOnly || sports.name === "demo")) {
-  await footballStore.upsertCatalog(sports.catalog());
+  const catalog = sports.catalog();
+  if (config.server.sportsData.appMode === "DEMO") {
+    assertExactlyOneMatch(catalog, "APP_MODE=DEMO");
+  }
+  await footballStore.upsertCatalog(catalog);
 }
 const football = new FootballService(footballStore, createPgAuditStore(db), config.server.fantasy);
 const contestStore = createPgContestStore(pool);
@@ -104,6 +117,83 @@ loadProviderIdMap(idMap, await providerIdMapRepo.listAll());
 if (sports && (sports.developmentOnly || sports.name === "demo")) {
   seedProviderIdMapFromCatalog(idMap, sports.name, sports.catalog());
 }
+
+// Phase 18C LIVE bootstrap: fetch configured fixture once, persist clubs/players/squad.
+if (
+  config.server.sportsData.appMode === "LIVE" &&
+  sportsRuntime.liveConfigured &&
+  sportsRuntime.liveAdapter?.client &&
+  config.server.sportsData.liveFixtureId
+) {
+  const fixtureId = config.server.sportsData.liveFixtureId;
+  try {
+    const payload = await sportsRuntime.liveAdapter.client.getConfiguredFixture(fixtureId);
+    const data =
+      payload && typeof payload === "object" && "data" in payload
+        ? (payload as { data: Record<string, unknown> }).data
+        : null;
+    if (!data || typeof data !== "object") {
+      throw new Error(`LIVE_FIXTURE_ID ${fixtureId} returned no fixture data`);
+    }
+    const boot = bootstrapLiveFixture(data, { nowIso: systemClock().toISOString() });
+    assertExactlyOneMatch(boot.catalog, "APP_MODE=LIVE");
+    if (boot.unsupportedPositions.length > 0) {
+      logger.warn(
+        {
+          count: boot.unsupportedPositions.length,
+          sample: boot.unsupportedPositions.slice(0, 5),
+        },
+        "LIVE bootstrap skipped players with unsupported position mappings",
+      );
+    }
+    await footballStore.upsertCatalog(boot.catalog);
+    seedProviderIdMapFromCatalog(idMap, "sportmonks", boot.catalog);
+    for (const mapping of [
+      ...boot.catalog.clubs.map((c) => ({
+        provider: "sportmonks" as const,
+        entityKind: "club" as const,
+        externalId: c.providerId,
+        kickrId: c.id,
+      })),
+      ...boot.catalog.players.map((p) => ({
+        provider: "sportmonks" as const,
+        entityKind: "player" as const,
+        externalId: p.providerId,
+        kickrId: p.id,
+      })),
+      ...boot.catalog.matches.map((m) => ({
+        provider: "sportmonks" as const,
+        entityKind: "fixture" as const,
+        externalId: m.externalFixtureId,
+        kickrId: m.id,
+      })),
+    ]) {
+      await providerIdMapRepo.upsertMapping(mapping);
+    }
+    logger.info(
+      {
+        fixtureId: boot.fixtureId,
+        matchId: boot.matchId,
+        home: boot.homeClubName,
+        away: boot.awayClubName,
+        players: boot.playerCount,
+        clubs: boot.clubCount,
+        ruleset: activeRuleset.name,
+      },
+      "LIVE Sportmonks fixture bootstrapped",
+    );
+  } catch (error) {
+    logger.error(
+      {
+        fixtureId,
+        message: error instanceof Error ? error.message : "bootstrap failed",
+      },
+      "LIVE fixture bootstrap failed — refusing silent DEMO fallback",
+    );
+    throw error;
+  }
+}
+
 const live = new LiveScoringService(
   footballStore,
   football,
@@ -115,11 +205,13 @@ const live = new LiveScoringService(
     ? (sportsRuntime.liveProviderName ?? "sportmonks")
     : sports?.name ?? "none",
   createCombinedScoringSource(contestStore, leagueStore),
+  activeRuleset,
 );
 live.metrics.setProvider(
   sportsRuntime.liveProviderName,
   sportsRuntime.liveConfigured,
 );
+const observationStore = createPgPlayerStatObservationStore(db);
 const ingest = createIngestWorker(
   sportsRuntime.liveAdapter?.client ?? null,
   live.pipeline,
@@ -132,6 +224,8 @@ const ingest = createIngestWorker(
     backoffMs: 500,
     logger,
     clock: () => systemClock(),
+    liveFixtureId: sportsRuntime.liveFixtureId,
+    observationStore,
   },
 );
 if (sportsRuntime.liveConfigured) {

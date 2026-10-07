@@ -60,6 +60,7 @@ export interface SportmonksClient {
   getInplayFixtures(include?: string): Promise<unknown>;
   getFixture(fixtureId: string | number, include?: string): Promise<unknown>;
   getFixtureEvents(fixtureId: string | number): Promise<unknown>;
+  getConfiguredFixture(fixtureId: string | number): Promise<unknown>;
 }
 
 export function createSportmonksClient(config: SportmonksProviderConfig): SportmonksClient {
@@ -110,15 +111,20 @@ export function createSportmonksClient(config: SportmonksProviderConfig): Sportm
     developmentOnly: false,
     configured,
     apiVersion: SPORTMONKS_API_VERSION,
-    async getInplayFixtures(include = "participants;scores;events;timeline;lineups;state") {
+    async getInplayFixtures(include = "participants;scores;events;timeline;lineups.details.type;state") {
       return request("/football/livescores/inplay", { include });
     },
-    async getFixture(fixtureId, include = "participants;scores;events;timeline;lineups;state") {
+    async getFixture(fixtureId, include = "participants;scores;events;timeline;lineups.details.type;state") {
       return request(`/football/fixtures/${fixtureId}`, { include });
     },
     async getFixtureEvents(fixtureId) {
       return request(`/football/fixtures/${fixtureId}`, {
-        include: "events;timeline;participants;lineups;state;scores",
+        include: "events;timeline;participants;lineups.details.type;state;scores",
+      });
+    },
+    async getConfiguredFixture(fixtureId: string | number) {
+      return request(`/football/fixtures/${fixtureId}`, {
+        include: "participants;scores;events;timeline;lineups.details.type;state;periods",
       });
     },
   };

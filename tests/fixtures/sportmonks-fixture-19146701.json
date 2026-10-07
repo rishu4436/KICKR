@@ -1,0 +1,1328 @@
+{
+  "provider": "sportmonks",
+  "apiVersion": "v3",
+  "fixture": {
+    "id": 19146701,
+    "name": "Celtic vs Kilmarnock",
+    "starting_at": "2024-08-04 15:30:00",
+    "state_id": 5,
+    "state": {
+      "id": 5,
+      "state": "FT",
+      "name": "Full Time",
+      "short_name": "FT",
+      "developer_name": "FT"
+    },
+    "scores": [
+      {
+        "id": 14671669,
+        "fixture_id": 19146701,
+        "type_id": 1,
+        "participant_id": 53,
+        "score": {
+          "goals": 2,
+          "participant": "home"
+        },
+        "description": "1ST_HALF"
+      },
+      {
+        "id": 14671670,
+        "fixture_id": 19146701,
+        "type_id": 1,
+        "participant_id": 180,
+        "score": {
+          "goals": 0,
+          "participant": "away"
+        },
+        "description": "1ST_HALF"
+      },
+      {
+        "id": 14671915,
+        "fixture_id": 19146701,
+        "type_id": 2,
+        "participant_id": 53,
+        "score": {
+          "goals": 4,
+          "participant": "home"
+        },
+        "description": "2ND_HALF"
+      },
+      {
+        "id": 14671916,
+        "fixture_id": 19146701,
+        "type_id": 2,
+        "participant_id": 180,
+        "score": {
+          "goals": 0,
+          "participant": "away"
+        },
+        "description": "2ND_HALF"
+      },
+      {
+        "id": 14671673,
+        "fixture_id": 19146701,
+        "type_id": 1525,
+        "participant_id": 53,
+        "score": {
+          "goals": 4,
+          "participant": "home"
+        },
+        "description": "CURRENT"
+      },
+      {
+        "id": 14671674,
+        "fixture_id": 19146701,
+        "type_id": 1525,
+        "participant_id": 180,
+        "score": {
+          "goals": 0,
+          "participant": "away"
+        },
+        "description": "CURRENT"
+      },
+      {
+        "id": 15743843,
+        "fixture_id": 19146701,
+        "type_id": 48996,
+        "participant_id": 53,
+        "score": {
+          "goals": 2,
+          "participant": "home"
+        },
+        "description": "2ND_HALF_ONLY"
+      },
+      {
+        "id": 15743844,
+        "fixture_id": 19146701,
+        "type_id": 48996,
+        "participant_id": 180,
+        "score": {
+          "goals": 0,
+          "participant": "away"
+        },
+        "description": "2ND_HALF_ONLY"
+      }
+    ],
+    "participants": [
+      {
+        "id": 180,
+        "name": "Kilmarnock",
+        "short_code": "KIL",
+        "meta": {
+          "location": "away",
+          "winner": false,
+          "position": 11
+        }
+      },
+      {
+        "id": 53,
+        "name": "Celtic",
+        "short_code": "CEL",
+        "meta": {
+          "location": "home",
+          "winner": true,
+          "position": 8
+        }
+      }
+    ],
+    "lineups": [
+      {
+        "id": 11420000578,
+        "fixture_id": 19146701,
+        "player_id": 169,
+        "team_id": 53,
+        "position_id": 24,
+        "type_id": 11,
+        "jersey_number": 1,
+        "player_name": "Kasper Schmeichel",
+        "formation_position": 1,
+        "details": []
+      },
+      {
+        "id": 11420000588,
+        "fixture_id": 19146701,
+        "player_id": 35659846,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 2,
+        "player_name": "Alistair Johnston",
+        "formation_position": 2,
+        "details": []
+      },
+      {
+        "id": 11420000586,
+        "fixture_id": 19146701,
+        "player_id": 173080,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 3,
+        "player_name": "Greg Taylor",
+        "formation_position": 5,
+        "details": [
+          {
+            "id": 1161288250,
+            "fixture_id": 19146701,
+            "player_id": 173080,
+            "team_id": 53,
+            "lineup_id": 11420000586,
+            "type_id": 79,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 79,
+              "name": "Assists",
+              "code": "assists",
+              "developer_name": "ASSISTS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000524,
+        "fixture_id": 19146701,
+        "player_id": 123659,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 5,
+        "player_name": "Liam Scales",
+        "formation_position": 4,
+        "details": [
+          {
+            "id": 1161314461,
+            "fixture_id": 19146701,
+            "player_id": 123659,
+            "team_id": 53,
+            "lineup_id": 11420000524,
+            "type_id": 52,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 52,
+              "name": "Goals",
+              "code": "goals",
+              "developer_name": "GOALS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161316300,
+            "fixture_id": 19146701,
+            "player_id": 123659,
+            "team_id": 53,
+            "lineup_id": 11420000524,
+            "type_id": 86,
+            "data": {
+              "value": 2
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000531,
+        "fixture_id": 19146701,
+        "player_id": 4237085,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 7,
+        "player_name": "Luis Palma",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000526,
+        "fixture_id": 19146701,
+        "player_id": 460810,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 8,
+        "player_name": "Kyogo Furuhashi",
+        "formation_position": 10,
+        "details": [
+          {
+            "id": 1161289591,
+            "fixture_id": 19146701,
+            "player_id": 460810,
+            "team_id": 53,
+            "lineup_id": 11420000526,
+            "type_id": 86,
+            "data": {
+              "value": 3
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161378900,
+            "fixture_id": 19146701,
+            "player_id": 460810,
+            "team_id": 53,
+            "lineup_id": 11420000526,
+            "type_id": 79,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 79,
+              "name": "Assists",
+              "code": "assists",
+              "developer_name": "ASSISTS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000638,
+        "fixture_id": 19146701,
+        "player_id": 2178915,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 10,
+        "player_name": "Nicolas K\u00fchn",
+        "formation_position": 9,
+        "details": [
+          {
+            "id": 1161309070,
+            "fixture_id": 19146701,
+            "player_id": 2178915,
+            "team_id": 53,
+            "lineup_id": 11420000638,
+            "type_id": 86,
+            "data": {
+              "value": 4
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161378109,
+            "fixture_id": 19146701,
+            "player_id": 2178915,
+            "team_id": 53,
+            "lineup_id": 11420000638,
+            "type_id": 52,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 52,
+              "name": "Goals",
+              "code": "goals",
+              "developer_name": "GOALS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000538,
+        "fixture_id": 19146701,
+        "player_id": 529045,
+        "team_id": 53,
+        "position_id": 24,
+        "type_id": 12,
+        "jersey_number": 12,
+        "player_name": "Viljami Sinisalo",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000542,
+        "fixture_id": 19146701,
+        "player_id": 37563550,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 13,
+        "player_name": "Hyun-jun Yang",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000534,
+        "fixture_id": 19146701,
+        "player_id": 30468670,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 15,
+        "player_name": "Odin Holm",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000527,
+        "fixture_id": 19146701,
+        "player_id": 1712,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 20,
+        "player_name": "Cameron Carter-Vickers",
+        "formation_position": 3,
+        "details": []
+      },
+      {
+        "id": 11420000533,
+        "fixture_id": 19146701,
+        "player_id": 319375,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 24,
+        "player_name": "Tomoki Iwata",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000535,
+        "fixture_id": 19146701,
+        "player_id": 24065382,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 28,
+        "player_name": "Paulo Bernardo",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000525,
+        "fixture_id": 19146701,
+        "player_id": 1494712,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 33,
+        "player_name": "Matt O'Riley",
+        "formation_position": 6,
+        "details": [
+          {
+            "id": 1161297417,
+            "fixture_id": 19146701,
+            "player_id": 1494712,
+            "team_id": 53,
+            "lineup_id": 11420000525,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161315528,
+            "fixture_id": 19146701,
+            "player_id": 1494712,
+            "team_id": 53,
+            "lineup_id": 11420000525,
+            "type_id": 79,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 79,
+              "name": "Assists",
+              "code": "assists",
+              "developer_name": "ASSISTS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000637,
+        "fixture_id": 19146701,
+        "player_id": 10966261,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 41,
+        "player_name": "Reo Hatate",
+        "formation_position": 8,
+        "details": [
+          {
+            "id": 1161289580,
+            "fixture_id": 19146701,
+            "player_id": 10966261,
+            "team_id": 53,
+            "lineup_id": 11420000637,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161287480,
+            "fixture_id": 19146701,
+            "player_id": 10966261,
+            "team_id": 53,
+            "lineup_id": 11420000637,
+            "type_id": 52,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 52,
+              "name": "Goals",
+              "code": "goals",
+              "developer_name": "GOALS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000590,
+        "fixture_id": 19146701,
+        "player_id": 8585,
+        "team_id": 53,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 42,
+        "player_name": "Callum McGregor",
+        "formation_position": 7,
+        "details": []
+      },
+      {
+        "id": 11420000639,
+        "fixture_id": 19146701,
+        "player_id": 172104,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 49,
+        "player_name": "James Forrest",
+        "formation_position": 11,
+        "details": [
+          {
+            "id": 1161320027,
+            "fixture_id": 19146701,
+            "player_id": 172104,
+            "team_id": 53,
+            "lineup_id": 11420000639,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000530,
+        "fixture_id": 19146701,
+        "player_id": 173129,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 12,
+        "jersey_number": 56,
+        "player_name": "Anthony Ralston",
+        "formation_position": null,
+        "details": [
+          {
+            "id": 1161418475,
+            "fixture_id": 19146701,
+            "player_id": 173129,
+            "team_id": 53,
+            "lineup_id": 11420000530,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161418476,
+            "fixture_id": 19146701,
+            "player_id": 173129,
+            "team_id": 53,
+            "lineup_id": 11420000530,
+            "type_id": 52,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 52,
+              "name": "Goals",
+              "code": "goals",
+              "developer_name": "GOALS",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000540,
+        "fixture_id": 19146701,
+        "player_id": 540672,
+        "team_id": 53,
+        "position_id": 25,
+        "type_id": 12,
+        "jersey_number": 57,
+        "player_name": "Stephen Welsh",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000532,
+        "fixture_id": 19146701,
+        "player_id": 378560,
+        "team_id": 53,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 90,
+        "player_name": "Mikey Johnston",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000635,
+        "fixture_id": 19146701,
+        "player_id": 12412,
+        "team_id": 180,
+        "position_id": 24,
+        "type_id": 12,
+        "jersey_number": 1,
+        "player_name": "Kieran O'Hara",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000539,
+        "fixture_id": 19146701,
+        "player_id": 32422758,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 5,
+        "player_name": "Lewis Mayo",
+        "formation_position": 3,
+        "details": []
+      },
+      {
+        "id": 11420000629,
+        "fixture_id": 19146701,
+        "player_id": 172486,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 7,
+        "player_name": "Rory McKenzie",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000609,
+        "fixture_id": 19146701,
+        "player_id": 149461,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 8,
+        "player_name": "Brad Lyons",
+        "formation_position": 2,
+        "details": [
+          {
+            "id": 1161407293,
+            "fixture_id": 19146701,
+            "player_id": 149461,
+            "team_id": 180,
+            "lineup_id": 11420000609,
+            "type_id": 84,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 84,
+              "name": "Yellowcards",
+              "code": "yellowcards",
+              "developer_name": "YELLOWCARDS",
+              "model_type": "statistic",
+              "stat_group": "overall"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000630,
+        "fixture_id": 19146701,
+        "player_id": 8839,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 9,
+        "player_name": "K. Vassell",
+        "formation_position": 10,
+        "details": []
+      },
+      {
+        "id": 11420000536,
+        "fixture_id": 19146701,
+        "player_id": 4285,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 10,
+        "player_name": "Matty Kennedy",
+        "formation_position": 11,
+        "details": [
+          {
+            "id": 1161295250,
+            "fixture_id": 19146701,
+            "player_id": 4285,
+            "team_id": 180,
+            "lineup_id": 11420000536,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000551,
+        "fixture_id": 19146701,
+        "player_id": 173003,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 11,
+        "player_name": "Danny Armstrong",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000537,
+        "fixture_id": 19146701,
+        "player_id": 37590770,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 12,
+        "player_name": "David Watson",
+        "formation_position": 6,
+        "details": []
+      },
+      {
+        "id": 11422695572,
+        "fixture_id": 19146701,
+        "player_id": 172505,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 12,
+        "jersey_number": 14,
+        "player_name": "Gary Mackay-Steven",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000528,
+        "fixture_id": 19146701,
+        "player_id": 175126,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 11,
+        "jersey_number": 15,
+        "player_name": "Fraser Murray",
+        "formation_position": 9,
+        "details": []
+      },
+      {
+        "id": 11420000632,
+        "fixture_id": 19146701,
+        "player_id": 173081,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 17,
+        "player_name": "Stuart Findlay",
+        "formation_position": 4,
+        "details": []
+      },
+      {
+        "id": 11420000589,
+        "fixture_id": 19146701,
+        "player_id": 173557,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 18,
+        "player_name": "Innes Cameron",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000585,
+        "fixture_id": 19146701,
+        "player_id": 173948,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 19,
+        "player_name": "Bruce Anderson",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000541,
+        "fixture_id": 19146701,
+        "player_id": 174383,
+        "team_id": 180,
+        "position_id": 24,
+        "type_id": 11,
+        "jersey_number": 20,
+        "player_name": "Robby McCrorie",
+        "formation_position": 1,
+        "details": []
+      },
+      {
+        "id": 11420000636,
+        "fixture_id": 19146701,
+        "player_id": 7160,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 22,
+        "player_name": "Liam Donnelly",
+        "formation_position": 7,
+        "details": [
+          {
+            "id": 1161295249,
+            "fixture_id": 19146701,
+            "player_id": 7160,
+            "team_id": 180,
+            "lineup_id": 11420000636,
+            "type_id": 86,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 86,
+              "name": "Shots On Target",
+              "code": "shots-on-target",
+              "developer_name": "SHOTS_ON_TARGET",
+              "model_type": "statistic",
+              "stat_group": "offensive"
+            }
+          },
+          {
+            "id": 1161391574,
+            "fixture_id": 19146701,
+            "player_id": 7160,
+            "team_id": 180,
+            "lineup_id": 11420000636,
+            "type_id": 84,
+            "data": {
+              "value": 1
+            },
+            "type": {
+              "id": 84,
+              "name": "Yellowcards",
+              "code": "yellowcards",
+              "developer_name": "YELLOWCARDS",
+              "model_type": "statistic",
+              "stat_group": "overall"
+            }
+          }
+        ]
+      },
+      {
+        "id": 11420000633,
+        "fixture_id": 19146701,
+        "player_id": 37602226,
+        "team_id": 180,
+        "position_id": 27,
+        "type_id": 12,
+        "jersey_number": 24,
+        "player_name": "Bobby Wales",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000631,
+        "fixture_id": 19146701,
+        "player_id": 37695603,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 12,
+        "jersey_number": 25,
+        "player_name": "Ethan Schilte-Brown",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000587,
+        "fixture_id": 19146701,
+        "player_id": 37649673,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 12,
+        "jersey_number": 26,
+        "player_name": "Ben Brannan",
+        "formation_position": null,
+        "details": []
+      },
+      {
+        "id": 11420000634,
+        "fixture_id": 19146701,
+        "player_id": 172633,
+        "team_id": 180,
+        "position_id": 26,
+        "type_id": 11,
+        "jersey_number": 31,
+        "player_name": "Liam Polworth",
+        "formation_position": 8,
+        "details": []
+      },
+      {
+        "id": 11420000529,
+        "fixture_id": 19146701,
+        "player_id": 37539361,
+        "team_id": 180,
+        "position_id": 25,
+        "type_id": 11,
+        "jersey_number": 51,
+        "player_name": "Oliver Bainbridge",
+        "formation_position": 5,
+        "details": []
+      }
+    ],
+    "events": [
+      {
+        "id": 117686211,
+        "fixture_id": 19146701,
+        "period_id": 5518189,
+        "participant_id": 53,
+        "type_id": 14,
+        "player_id": 10966261,
+        "related_player_id": 173080,
+        "player_name": "Reo Hatate",
+        "related_player_name": "Greg Taylor",
+        "result": "1-0",
+        "info": "Right foot shot",
+        "addition": "1st Goal",
+        "minute": 17,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": 1522,
+        "sort_order": 1,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117687534,
+        "fixture_id": 19146701,
+        "period_id": 5518189,
+        "participant_id": 53,
+        "type_id": 14,
+        "player_id": 123659,
+        "related_player_id": 1494712,
+        "player_name": "Liam Scales",
+        "related_player_name": "Matt O'Riley",
+        "result": "2-0",
+        "info": "Header",
+        "addition": "2nd Goal",
+        "minute": 40,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": 1694,
+        "sort_order": 2,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117690383,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 14,
+        "player_id": 2178915,
+        "related_player_id": 460810,
+        "player_name": "Nicolas K\u00fchn",
+        "related_player_name": "Kyogo Furuhashi",
+        "result": "3-0",
+        "info": "Left foot shot",
+        "addition": "3rd Goal",
+        "minute": 59,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": 1521,
+        "sort_order": 3,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117697075,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 14,
+        "player_id": 173129,
+        "related_player_id": null,
+        "player_name": "Anthony Ralston",
+        "related_player_name": null,
+        "result": "4-0",
+        "info": "Right foot shot",
+        "addition": "4th Goal",
+        "minute": 90,
+        "extra_minute": 4,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": 1522,
+        "sort_order": 4,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117691042,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 18,
+        "player_id": 4237085,
+        "related_player_id": 2178915,
+        "player_name": "Luis Palma",
+        "related_player_name": "Nicolas K\u00fchn",
+        "result": null,
+        "info": null,
+        "addition": "1st Substitution",
+        "minute": 63,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 1,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117691043,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 18,
+        "player_id": 173129,
+        "related_player_id": 35659846,
+        "player_name": "Anthony Ralston",
+        "related_player_name": "Alistair Johnston",
+        "result": null,
+        "info": null,
+        "addition": "2nd Substitution",
+        "minute": 63,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 2,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117691907,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 18,
+        "player_id": 172486,
+        "related_player_id": 172633,
+        "player_name": "Rory McKenzie",
+        "related_player_name": "Liam Polworth",
+        "result": null,
+        "info": null,
+        "addition": "3rd Substitution",
+        "minute": 65,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 3,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117691908,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 18,
+        "player_id": 173003,
+        "related_player_id": 4285,
+        "player_name": "Danny Armstrong",
+        "related_player_name": "Matty Kennedy\u00a0",
+        "result": null,
+        "info": null,
+        "addition": "4th Substitution",
+        "minute": 66,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 4,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117691909,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 18,
+        "player_id": 173557,
+        "related_player_id": 8839,
+        "player_name": "Innes Cameron",
+        "related_player_name": "K. Vassell",
+        "result": null,
+        "info": null,
+        "addition": "5th Substitution",
+        "minute": 66,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 5,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117696010,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 18,
+        "player_id": 37602226,
+        "related_player_id": 7160,
+        "player_name": "Bobby Wales",
+        "related_player_name": "Liam Donnelly",
+        "result": null,
+        "info": null,
+        "addition": "6th Substitution",
+        "minute": 74,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 6,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117696075,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 18,
+        "player_id": 37563550,
+        "related_player_id": 172104,
+        "player_name": "Hyun-jun Yang",
+        "related_player_name": "James Forrest",
+        "result": null,
+        "info": null,
+        "addition": "7th Substitution",
+        "minute": 77,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 7,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117696451,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 53,
+        "type_id": 18,
+        "player_id": 30468670,
+        "related_player_id": 10966261,
+        "player_name": "Odin Holm",
+        "related_player_name": "Reo Hatate",
+        "result": null,
+        "info": null,
+        "addition": "8th Substitution",
+        "minute": 82,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 8,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117696725,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 18,
+        "player_id": 172505,
+        "related_player_id": 175126,
+        "player_name": "Gary Mackay-Steven",
+        "related_player_name": "Fraser Murray",
+        "result": null,
+        "info": null,
+        "addition": "9th Substitution",
+        "minute": 87,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 9,
+        "rescinded": null,
+        "section": "event"
+      },
+      {
+        "id": 117694489,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 19,
+        "player_id": 7160,
+        "related_player_id": null,
+        "player_name": "Liam Donnelly",
+        "related_player_name": null,
+        "result": null,
+        "info": null,
+        "addition": "1st Yellowcard",
+        "minute": 70,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 1,
+        "rescinded": false,
+        "section": "event"
+      },
+      {
+        "id": 117696498,
+        "fixture_id": 19146701,
+        "period_id": 5518291,
+        "participant_id": 180,
+        "type_id": 19,
+        "player_id": 149461,
+        "related_player_id": null,
+        "player_name": "Brad Lyons\u00a0",
+        "related_player_name": null,
+        "result": null,
+        "info": null,
+        "addition": "2nd Yellowcard",
+        "minute": 84,
+        "extra_minute": null,
+        "injured": null,
+        "on_bench": false,
+        "sub_type_id": null,
+        "sort_order": 2,
+        "rescinded": false,
+        "section": "event"
+      }
+    ],
+    "periods": [
+      {
+        "id": 5518189,
+        "fixture_id": 19146701,
+        "type_id": 1,
+        "started": 1722785498,
+        "ended": 1722788285,
+        "counts_from": 0,
+        "ticking": false,
+        "sort_order": 1,
+        "description": "1st-half",
+        "time_added": 1,
+        "period_length": 45,
+        "minutes": 46,
+        "seconds": 27
+      },
+      {
+        "id": 5518291,
+        "fixture_id": 19146701,
+        "type_id": 2,
+        "started": 1722789256,
+        "ended": 1722791956,
+        "counts_from": 45,
+        "ticking": false,
+        "sort_order": 2,
+        "description": "2nd-half",
+        "time_added": null,
+        "period_length": 45,
+        "minutes": 90,
+        "seconds": 0
+      }
+    ]
+  }
+}

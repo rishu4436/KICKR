@@ -114,7 +114,7 @@ export function creditsPanelHtml(used: number, cap: number, left: number): strin
 }
 
 
-export type FreshnessUiOpts = { demoData?: boolean };
+export type FreshnessUiOpts = { demoData?: boolean; liveData?: boolean };
 
 /** Player-facing freshness banner — never expose provider/ops jargon. */
 export function freshnessBannerHtml(
