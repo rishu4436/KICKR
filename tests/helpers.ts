@@ -75,6 +75,8 @@ export function testConfig(overrides?: {
       appMode: null,
       liveData: false,
       liveFixtureId: null,
+      modesAvailable: sportsDataProvider === "demo" ? ["DEMO"] : [],
+      dualMode: false,
     },
     server: {
       nodeEnv,
@@ -103,6 +105,8 @@ export function testConfig(overrides?: {
         demoControlToken: "",
         appMode: null,
         liveFixtureId: null,
+        modesAvailable: sportsDataProvider === "demo" ? ["DEMO"] : [],
+        dualMode: false,
         scoringRuleset: "DEV_V1",
       },
       fantasy: { creditCap: 100, maxPlayersFromOneTeam: null },

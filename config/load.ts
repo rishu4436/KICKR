@@ -64,6 +64,13 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   const liveData = appModeResolved.appMode === "LIVE" || (appModeResolved.appMode === null && liveProviderConfigured);
   const scoringRuleset = liveData || sportsProvider === "sportmonks" ? "LIVE_V1" : "DEV_V1";
 
+  const modesAvailable = appModeResolved.modesAvailable.length
+    ? appModeResolved.modesAvailable
+    : demoData
+      ? (["DEMO"] as Array<"LIVE" | "DEMO">)
+      : liveData
+        ? (["LIVE"] as Array<"LIVE" | "DEMO">)
+        : [];
   const publicConfig: PublicConfig = {
     appName: "KICKR",
     environment: data.NODE_ENV,
@@ -75,10 +82,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     sportsDataProvider: catalogName,
     sportsProvider,
     liveProviderConfigured,
-    demoData,
+    demoData: demoData && !appModeResolved.dualMode,
     appMode: appModeResolved.appMode,
-    liveData: liveData && !demoData,
+    liveData: liveData && !demoData && !appModeResolved.dualMode,
     liveFixtureId: appModeResolved.liveFixtureId,
+    modesAvailable,
+    dualMode: appModeResolved.dualMode,
   };
 
   assertPublicConfigShape(publicConfig);
@@ -120,6 +129,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
         demoControlToken: data.DEMO_CONTROL_TOKEN,
         appMode: appModeResolved.appMode,
         liveFixtureId: appModeResolved.liveFixtureId,
+        modesAvailable,
+        dualMode: appModeResolved.dualMode,
         scoringRuleset,
       },
       fantasy: {

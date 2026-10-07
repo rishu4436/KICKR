@@ -13,6 +13,8 @@ import { resolveSportsRuntime } from "../sports/factory.js";
 import { LIVE_V1_RULESET } from "../domain/scoring/live-v1.js";
 import { DEV_V1_RULESET } from "../domain/scoring/dev-v1.js";
 import { bootstrapLiveFixture, assertExactlyOneMatch } from "../sports/live-bootstrap.js";
+import { FREE_TEMPLATES } from "../contests/free/catalog.js";
+import { buildDemoSingleMatchCatalog } from "../sports/demo-provider.js";
 import { createPgPlayerStatObservationStore } from "../db/player-stat-observations.js";
 
 import { InMemoryProviderIdMap, loadProviderIdMap, seedProviderIdMapFromCatalog } from "../sports/id-map.js";
@@ -47,6 +49,21 @@ import { ProfileService, OnboardingService } from "../profile/index.js";
  * Phase 5 starts the live ingest worker only when LIVE_PROVIDER_CONFIGURED.
  * Settlement, review, and payout workers remain contracts-only.
  */
+
+async function ensureFreeContestsForMatch(
+  contests: ContestService,
+  matchId: string,
+  label: string,
+): Promise<void> {
+  const ctx = { now: systemClock(), correlationId: `free-ensure-${label}-${matchId}` };
+  for (const template of FREE_TEMPLATES) {
+    const contest = await contests.ensureOpenContest(matchId, template.id, ctx);
+    if (contest.contestKind !== "FREE" || contest.entryFeeBaseUnits !== 0) {
+      throw new Error(`Refused non-FREE contest while ensuring ${label} free contests`);
+    }
+  }
+}
+
 let config: ReturnType<typeof loadConfig>;
 try {
   config = loadConfig(process.env);
@@ -120,7 +137,7 @@ if (sports && (sports.developmentOnly || sports.name === "demo")) {
 
 // Phase 18C LIVE bootstrap: fetch configured fixture once, persist clubs/players/squad.
 if (
-  config.server.sportsData.appMode === "LIVE" &&
+  (config.server.sportsData.appMode === "LIVE" || config.server.sportsData.appMode === "DUAL") &&
   sportsRuntime.liveConfigured &&
   sportsRuntime.liveAdapter?.client &&
   config.server.sportsData.liveFixtureId
@@ -136,7 +153,7 @@ if (
       throw new Error(`LIVE_FIXTURE_ID ${fixtureId} returned no fixture data`);
     }
     const boot = bootstrapLiveFixture(data, { nowIso: systemClock().toISOString() });
-    assertExactlyOneMatch(boot.catalog, "APP_MODE=LIVE");
+    assertExactlyOneMatch(boot.catalog, config.server.sportsData.appMode === "DUAL" ? "APP_MODE=DUAL LIVE" : "APP_MODE=LIVE");
     if (boot.unsupportedPositions.length > 0) {
       logger.warn(
         {
@@ -191,6 +208,32 @@ if (
       "LIVE fixture bootstrap failed — refusing silent DEMO fallback",
     );
     throw error;
+  }
+}
+
+
+// Phase 18D: ensure FREE contests for seeded DEMO + LIVE matches (public LIVE stays FREE).
+if (config.server.sportsData.appMode === "DUAL" || config.server.sportsData.appMode === "DEMO") {
+  const demoCatalog = buildDemoSingleMatchCatalog();
+  // Re-upsert guarantees exactly one DEMO fixture even if factory catalog path differed.
+  if (config.server.sportsData.appMode === "DUAL") {
+    assertExactlyOneMatch(demoCatalog, "APP_MODE=DUAL DEMO");
+    await footballStore.upsertCatalog(demoCatalog);
+    seedProviderIdMapFromCatalog(idMap, "demo", demoCatalog);
+  }
+  for (const match of demoCatalog.matches) {
+    await ensureFreeContestsForMatch(contests, match.id, "DEMO");
+  }
+}
+if (
+  (config.server.sportsData.appMode === "LIVE" || config.server.sportsData.appMode === "DUAL") &&
+  config.server.sportsData.liveFixtureId
+) {
+  const liveMatches = (await footballStore.listMatches()).filter(
+    (m) => m.dataSource.provider === "sportmonks" && m.externalFixtureId === config.server.sportsData.liveFixtureId,
+  );
+  for (const match of liveMatches) {
+    await ensureFreeContestsForMatch(contests, match.id, "LIVE");
   }
 }
 

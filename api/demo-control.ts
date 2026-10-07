@@ -24,6 +24,7 @@ function gateOf(deps: AppDeps): DemoControlGate {
   return {
     sportsProvider: deps.config.public.sportsProvider,
     demoControlToken: deps.config.server.sportsData.demoControlToken,
+    appMode: deps.config.server.sportsData.appMode,
   };
 }
 
@@ -59,10 +60,12 @@ export function registerDemoControlRoutes(app: Hono<AppEnv>, deps: AppDeps): voi
       enabled: configured,
       sportsProvider: deps.config.public.sportsProvider,
       demoData: deps.config.public.demoData,
+      dualMode: deps.config.public.dualMode,
+      appMode: deps.config.public.appMode,
       runSettlement: false,
       note: configured
         ? "Present x-demo-control-token to advance DEMO matches / inject scoring waves."
-        : "Disabled unless SPORTS_PROVIDER=DEMO and DEMO_CONTROL_TOKEN (>=16 chars) is set.",
+        : "Disabled unless APP_MODE=DEMO|DUAL (or SPORTS_PROVIDER=DEMO) and DEMO_CONTROL_TOKEN (>=16 chars) is set.",
     });
   });
 

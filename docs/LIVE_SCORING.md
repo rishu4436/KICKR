@@ -17,16 +17,19 @@
 | --- | --- |
 | `LIVE` | Exactly one `LIVE_FIXTURE_ID`. Real Sportmonks match. UI shows **LIVE DATA**. Requires `SPORTS_API_KEY`. Never falls back to DEMO. |
 | `DEMO` | Exactly one fictional match. UI shows **DEMO DATA**. Refuses `LIVE_FIXTURE_ID` / Sportmonks. |
+| `DUAL` | One deployment serves **both**. Client selects via `?mode=LIVE|DEMO` or `X-KICKR-Mode`. LIVE uses `LIVE_FIXTURE_ID` + Sportmonks; DEMO uses the fictional single match. Never mixes; never silent cross-fallback. |
 | *(unset)* | Legacy `SPORTS_PROVIDER` behavior for local/tests. |
 
 Misconfiguration fails visibly at config load — no silent LIVE↔DEMO fallback.
+
+Ops: see [LIVE_FIXTURE_ID.md](./LIVE_FIXTURE_ID.md) for changing the public LIVE fixture without code changes.
 
 ## Configuration
 
 | Env | Purpose |
 | --- | --- |
-| `APP_MODE` | `LIVE` \| `DEMO` (Phase 18C) |
-| `LIVE_FIXTURE_ID` | Required when `APP_MODE=LIVE` — exactly one Sportmonks fixture id |
+| `APP_MODE` | `LIVE` \| `DEMO` \| `DUAL` (Phase 18C/18D) |
+| `LIVE_FIXTURE_ID` | Required when `APP_MODE=LIVE` or `DUAL` — exactly one Sportmonks fixture id |
 | `SPORTS_DATA_PROVIDER` | Phase 2 catalog: `local-dev` \| `unset` |
 | `SPORTS_PROVIDER` | Live adapter: `sportmonks` \| `demo` \| `none` (forced by `APP_MODE` when set) |
 | `SPORTS_API_KEY` | Sportmonks token. Missing ⇒ fail closed |

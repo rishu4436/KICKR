@@ -279,6 +279,10 @@ const state: {
   environment: string | null;
   demoData: boolean;
   liveData: boolean;
+  dualMode: boolean;
+  modesAvailable: Array<"LIVE" | "DEMO">;
+  /** Client-selected dataset mode (DUAL). Ignored when server is single-mode. */
+  selectedMode: "LIVE" | "DEMO";
 } = {
   token: sessionStorage.getItem("kickr.session.token") ?? sessionStorage.getItem("kickr.dev.token"),
   authMode: (sessionStorage.getItem("kickr.auth.mode") as "dev" | "wallet" | null) ?? (sessionStorage.getItem("kickr.dev.token") ? "dev" : null),
@@ -301,6 +305,9 @@ const state: {
   environment: null,
   demoData: false,
   liveData: false,
+  dualMode: false,
+  modesAvailable: [],
+  selectedMode: (localStorage.getItem("kickr.ui.mode") as "LIVE" | "DEMO" | null) === "LIVE" ? "LIVE" : "DEMO",
 };
 
 let devDepositKey: Keypair | null = null;
@@ -347,11 +354,47 @@ function formatUpdated(iso: string | null | undefined): string {
   }
 }
 
+function effectiveDataMode(): "LIVE" | "DEMO" | null {
+  if (state.dualMode) return state.selectedMode;
+  if (state.liveData) return "LIVE";
+  if (state.demoData) return "DEMO";
+  if (state.modesAvailable.length === 1) return state.modesAvailable[0]!;
+  return null;
+}
+
+function withMode(path: string): string {
+  const mode = effectiveDataMode();
+  if (!mode) return path;
+  // Only attach mode to football/match listing paths (isolation boundary).
+  if (!path.startsWith("/matches") && !path.startsWith("/v1/")) {
+    // still send header below
+  }
+  if (!path.startsWith("/matches")) return path;
+  const join = path.includes("?") ? "&" : "?";
+  if (/[?&]mode=/.test(path)) return path;
+  return `${path}${join}mode=${mode}`;
+}
+
+function setSelectedMode(mode: "LIVE" | "DEMO"): void {
+  if (!state.modesAvailable.includes(mode) && state.dualMode === false && state.modesAvailable.length > 0) {
+    return;
+  }
+  state.selectedMode = mode;
+  localStorage.setItem("kickr.ui.mode", mode);
+  // Derive banner flags from selection when dual.
+  if (state.dualMode) {
+    state.liveData = mode === "LIVE";
+    state.demoData = mode === "DEMO";
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (state.token) headers.set("authorization", `Bearer ${state.token}`);
   if (init?.body) headers.set("content-type", "application/json");
-  const response = await fetch(path, { ...init, headers });
+  const mode = effectiveDataMode();
+  if (mode) headers.set("x-kickr-mode", mode);
+  const response = await fetch(withMode(path), { ...init, headers });
   const body = (await response.json()) as T & { error?: { message: string; details?: { errors: Array<{ message: string }> } } };
   if (!response.ok) {
     const details = body.error?.details?.errors?.map((error) => error.message).join(" ");
@@ -368,24 +411,77 @@ async function runtimeEnvironment(): Promise<string> {
       demoData?: boolean;
       liveData?: boolean;
       appMode?: string | null;
+      dualMode?: boolean;
+      modesAvailable?: Array<"LIVE" | "DEMO">;
+      liveFixtureId?: string | null;
     };
     state.environment = body.environment ?? "development";
-    state.demoData = body.demoData === true;
-    state.liveData = body.liveData === true || body.appMode === "LIVE";
+    state.dualMode = body.dualMode === true || body.appMode === "DUAL";
+    state.modesAvailable = Array.isArray(body.modesAvailable)
+      ? body.modesAvailable.filter((m): m is "LIVE" | "DEMO" => m === "LIVE" || m === "DEMO")
+      : body.appMode === "LIVE"
+        ? ["LIVE"]
+        : body.appMode === "DEMO"
+          ? ["DEMO"]
+          : body.dualMode
+            ? ["LIVE", "DEMO"]
+            : [];
+    if (state.dualMode) {
+      if (!state.modesAvailable.includes(state.selectedMode)) {
+        state.selectedMode = state.modesAvailable.includes("LIVE") ? "LIVE" : "DEMO";
+      }
+      setSelectedMode(state.selectedMode);
+    } else {
+      state.demoData = body.demoData === true;
+      state.liveData = body.liveData === true || body.appMode === "LIVE";
+      if (state.liveData) state.selectedMode = "LIVE";
+      else if (state.demoData) state.selectedMode = "DEMO";
+    }
   } catch {
     state.environment = "development";
     state.demoData = false;
     state.liveData = false;
+    state.dualMode = false;
+    state.modesAvailable = [];
   }
   return state.environment;
 }
 
 function demoBannerHtml(): string {
-  if (state.liveData) {
+  const mode = effectiveDataMode();
+  if (mode === "LIVE" || state.liveData) {
     return `<div class="demo-banner demo-banner-chip live-data-chip" role="status">LIVE DATA · Sportmonks match feed</div>`;
   }
-  if (!state.demoData) return "";
-  return `<div class="demo-banner demo-banner-chip" role="status">DEMO DATA · Fictional match data</div>`;
+  if (mode === "DEMO" || state.demoData) {
+    return `<div class="demo-banner demo-banner-chip" role="status">DEMO DATA · Fictional match data</div>`;
+  }
+  return "";
+}
+
+function modeSwitchHtml(): string {
+  if (!state.dualMode && state.modesAvailable.length < 2) return "";
+  const liveOn = state.selectedMode === "LIVE";
+  return `<div class="mode-switch" role="group" aria-label="Data mode">
+    <button type="button" class="mode-btn${liveOn ? " active live" : ""}" data-mode="LIVE" aria-pressed="${liveOn}">LIVE</button>
+    <button type="button" class="mode-btn${!liveOn ? " active demo" : ""}" data-mode="DEMO" aria-pressed="${!liveOn}">DEMO</button>
+  </div>`;
+}
+
+let modeSwitchBound = false;
+function bindModeSwitch(): void {
+  if (modeSwitchBound) return;
+  modeSwitchBound = true;
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest<HTMLButtonElement>("button[data-mode]");
+    if (!button) return;
+    const mode = button.dataset.mode === "LIVE" ? "LIVE" : "DEMO";
+    if (mode === state.selectedMode) return;
+    setSelectedMode(mode);
+    location.hash = "#/";
+    void render();
+  });
 }
 
 function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAddress: string }): void {
@@ -402,7 +498,7 @@ function persistSession(input: { token: string; mode: "dev" | "wallet"; walletAd
 async function signInDevelopment(): Promise<void> {
   await runtimeEnvironment();
   // Ephemeral keypair sign-in is allowed for DEMO DATA public demo and local development.
-  if (state.environment === "production" && !state.demoData) {
+  if (state.environment === "production" && !state.demoData && !state.dualMode) {
     throw new Error("Development signer is disabled");
   }
   const pair = nacl.sign.keyPair();
@@ -459,6 +555,7 @@ function shell(title: string, body: string): string {
   return `<div class="shell">
     <div class="top">
       <a class="brand" href="#/">KICKR</a>
+      ${modeSwitchHtml()}
       <div class="nav nav-desktop">
         <a href="#/" ${matchesCurrent ? 'aria-current="page"' : ""}>Matches</a>
         <a href="#/my-contests" ${contestsCurrent ? 'aria-current="page"' : ""}>Contests</a>
@@ -497,7 +594,7 @@ function bindLandingAuth(): void {
     void (async () => {
       try {
         await runtimeEnvironment();
-        if (state.demoData || state.environment !== "production") {
+        if (state.demoData || state.dualMode || state.environment !== "production") {
           await signInDevelopment();
         } else {
           await signInWithWallet();
@@ -693,6 +790,7 @@ async function renderList(): Promise<void> {
     ${cards || empty("No matches in this view yet.")}
   `);
   bindOnboardingDismiss();
+  bindModeSwitch();
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-bucket]")) {
     button.addEventListener("click", () => {
       state.bucket = button.dataset.bucket as typeof state.bucket;

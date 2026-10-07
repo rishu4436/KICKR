@@ -26,8 +26,8 @@ export interface SportsRuntimeConfig {
   pollIntervalMs: number;
   requestTimeoutMs: number;
   logger?: Logger;
-  /** When APP_MODE=DEMO, catalog is exactly one fictional match. */
-  appMode?: "LIVE" | "DEMO" | null;
+  /** When APP_MODE=DEMO, catalog is exactly one fictional match. DUAL seeds demo alongside live. */
+  appMode?: "LIVE" | "DEMO" | "DUAL" | null;
   liveFixtureId?: string | null;
 }
 
@@ -40,13 +40,13 @@ export interface SportsRuntime {
   liveAdapter: ReturnType<typeof createSportmonksSportsProvider> | null;
   pollIntervalMs: number;
   liveFixtureId: string | null;
-  appMode: "LIVE" | "DEMO" | null;
+  appMode: "LIVE" | "DEMO" | "DUAL" | null;
 }
 
 function resolveCatalog(
   provider: SportsProviderName,
   legacyDataProvider: string,
-  appMode: "LIVE" | "DEMO" | null | undefined,
+  appMode: "LIVE" | "DEMO" | "DUAL" | null | undefined,
 ): SportsDataProvider | null {
   if (provider === "demo") {
     return appMode === "DEMO" ? createDemoSingleMatchProvider() : createDemoProvider();
@@ -55,8 +55,9 @@ function resolveCatalog(
     return createLocalDevProvider();
   }
   if (provider === "sportmonks") {
-    // Live adapter owns fixtures; no fictional catalog overlay.
-    return null;
+    // Live adapter owns LIVE fixtures. DUAL also exposes a single DEMO catalog (seeded separately).
+    // Return demo single-match provider for DUAL so startup can upsert DEMO without mixing responses.
+    return appMode === "DUAL" ? createDemoSingleMatchProvider() : null;
   }
   // provider === "none": legacy SPORTS_DATA_PROVIDER for local/dev/test only.
   const legacy = (legacyDataProvider || "unset").trim().toLowerCase();

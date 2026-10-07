@@ -4,6 +4,7 @@ import type { Principal } from "../auth/types.js";
 import { isPlayerRole } from "../domain/football/roles.js";
 import type { AppEnv, AppDeps } from "./server.js";
 import { AppError } from "../shared/errors.js";
+import { resolveRequestMode, matchBelongsToMode } from "../sports/mode-filter.js";
 
 const uuidSchema = z.string().uuid();
 
@@ -28,9 +29,19 @@ export function registerFootballRoutes(
     if (bucket !== undefined && bucket !== "upcoming" && bucket !== "live" && bucket !== "completed") {
       throw new AppError("VALIDATION", 400, "bucket must be upcoming, live, or completed");
     }
-    const matches = await deps.football.listMatches(bucket);
+    let mode;
+    try {
+      mode = resolveRequestMode({
+        appMode: deps.config.server.sportsData.appMode,
+        clientMode: c.req.query("mode") ?? c.req.header("x-kickr-mode"),
+      });
+    } catch (error) {
+      throw new AppError("VALIDATION", 400, error instanceof Error ? error.message : "Invalid mode");
+    }
+    const matches = await deps.football.listMatches(bucket, mode);
     return c.json({
       matches,
+      mode: mode ?? null,
       creditCap: deps.football.rulesView().creditCap,
       maxPlayersFromOneTeam: deps.football.rulesView().maxPlayersFromOneTeam,
     });
@@ -68,7 +79,19 @@ export function registerFootballRoutes(
     if (!match) {
       throw new AppError("NOT_FOUND", 404, "Not found");
     }
-    return c.json({ match });
+    let mode;
+    try {
+      mode = resolveRequestMode({
+        appMode: deps.config.server.sportsData.appMode,
+        clientMode: c.req.query("mode") ?? c.req.header("x-kickr-mode"),
+      });
+    } catch (error) {
+      throw new AppError("VALIDATION", 400, error instanceof Error ? error.message : "Invalid mode");
+    }
+    if (!matchBelongsToMode(match.dataSource.provider, mode)) {
+      throw new AppError("NOT_FOUND", 404, "Not found");
+    }
+    return c.json({ match, mode: mode ?? null });
   });
 
   app.get("/matches/:id/my-team", async (c) => {

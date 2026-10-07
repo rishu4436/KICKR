@@ -26,6 +26,8 @@ export const PUBLIC_CONFIG_KEYS = [
   "appMode",
   "liveData",
   "liveFixtureId",
+  "modesAvailable",
+  "dualMode",
 ] as const;
 
 export type PublicConfigKey = (typeof PUBLIC_CONFIG_KEYS)[number];
@@ -47,12 +49,16 @@ export interface PublicConfig {
   liveProviderConfigured: boolean;
   /** True when the active catalog is DEMO DATA (fictional, production-demo safe). */
   demoData: boolean;
-  /** APP_MODE when set: LIVE | DEMO. Null when unset (legacy). */
-  appMode: "LIVE" | "DEMO" | null;
-  /** True when APP_MODE=LIVE (real Sportmonks). Mutually exclusive with demoData. */
+  /** APP_MODE when set: LIVE | DEMO | DUAL. Null when unset (legacy). */
+  appMode: "LIVE" | "DEMO" | "DUAL" | null;
+  /** True when APP_MODE=LIVE (real Sportmonks). Mutually exclusive with demoData. False in DUAL (client selects). */
   liveData: boolean;
-  /** Public fixture id when LIVE (never the API key). Null otherwise. */
+  /** Public fixture id when LIVE or DUAL (never the API key). Null otherwise. */
   liveFixtureId: string | null;
+  /** Modes this deployment can serve. Client switches among these in DUAL. */
+  modesAvailable: Array<"LIVE" | "DEMO">;
+  /** True when APP_MODE=DUAL — one process serves both datasets, isolated by mode. */
+  dualMode: boolean;
 }
 
 export interface ServerConfig {
@@ -88,9 +94,12 @@ export interface ServerConfig {
     /** Raw DEMO_CONTROL_TOKEN; empty disables control. Never expose publicly. */
     demoControlToken: string;
     /** APP_MODE when set. */
-    appMode: "LIVE" | "DEMO" | null;
-    /** LIVE_FIXTURE_ID when APP_MODE=LIVE. */
+    appMode: "LIVE" | "DEMO" | "DUAL" | null;
+    /** LIVE_FIXTURE_ID when APP_MODE=LIVE or DUAL. */
     liveFixtureId: string | null;
+    /** Modes available (LIVE and/or DEMO). */
+    modesAvailable: Array<"LIVE" | "DEMO">;
+    dualMode: boolean;
     /** Active scoring ruleset name (DEV_V1 | LIVE_V1). */
     scoringRuleset: string;
   };

@@ -93,12 +93,12 @@ export const envSchema = z.object({
   SPORTS_API_URL: stringOrDefault("https://api.sportmonks.com/v3"),
   SPORTS_POLL_INTERVAL: intOrDefault(15),
   SPORTS_REQUEST_TIMEOUT_MS: intOrDefault(8000),
-  // Phase 18C: APP_MODE=LIVE | DEMO. Empty = legacy SPORTS_PROVIDER behavior (tests/dev).
+  // Phase 18C/18D: APP_MODE=LIVE | DEMO | DUAL. Empty = legacy SPORTS_PROVIDER behavior (tests/dev).
   APP_MODE: z.preprocess(
     (value) => (value === undefined || value === "" ? "" : value),
     z.string(),
   ),
-  // Exactly one Sportmonks fixture when APP_MODE=LIVE. Empty otherwise.
+  // Exactly one Sportmonks fixture when APP_MODE=LIVE or DUAL. Empty for DEMO-only.
   LIVE_FIXTURE_ID: z.preprocess(
     (value) => (value === undefined || value === "" ? "" : value),
     z.string(),

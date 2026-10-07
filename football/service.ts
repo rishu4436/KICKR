@@ -54,10 +54,15 @@ export class FootballService {
     private readonly rules: FantasyRules,
   ) {}
 
-  async listMatches(bucket?: MatchBucket): Promise<MatchView[]> {
+  async listMatches(
+    bucket?: MatchBucket,
+    mode?: "LIVE" | "DEMO" | null,
+  ): Promise<MatchView[]> {
     const matches = await this.store.listMatches();
     const views: MatchView[] = [];
     for (const match of matches) {
+      if (mode === "LIVE" && match.dataSource.provider !== "sportmonks") continue;
+      if (mode === "DEMO" && match.dataSource.provider !== "demo") continue;
       const view = await this.toMatchView(match);
       if (!bucket || view.bucket === bucket) {
         views.push(view);

@@ -1014,3 +1014,46 @@ form.card input, form.card select {
   .pitch { min-height: 260px; }
   .brand { letter-spacing: 0.14em; font-size: 13px; }
 }
+
+
+/* Phase 18D LIVE / DEMO mode switch */
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  flex-shrink: 0;
+}
+.mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.mode-btn.active.live {
+  background: rgba(248, 113, 113, 0.2);
+  color: #fca5a5;
+}
+.mode-btn.active.demo {
+  background: rgba(251, 191, 36, 0.18);
+  color: var(--warn);
+}
+.live-data-chip {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+}
+@media (max-width: 720px) {
+  .mode-switch { order: 3; margin-left: auto; }
+  .top { flex-wrap: wrap; }
+}

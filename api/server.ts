@@ -198,9 +198,14 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.get("/health", (c) => {
+    const tokenOk = (deps.config.server.sportsData.demoControlToken ?? "").trim().length >= 16;
+    const appMode = deps.config.server.sportsData.appMode;
     const demoControlConfigured =
-      deps.config.public.sportsProvider === "demo" &&
-      (deps.config.server.sportsData.demoControlToken ?? "").trim().length >= 16;
+      tokenOk &&
+      appMode !== "LIVE" &&
+      (appMode === "DEMO" ||
+        appMode === "DUAL" ||
+        deps.config.public.sportsProvider === "demo");
     return c.json({
       ok: true,
       check: "live",
@@ -208,6 +213,10 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
       LIVE_PROVIDER_CONFIGURED: deps.config.public.liveProviderConfigured,
       sportsProvider: deps.config.public.sportsProvider,
       demoData: deps.config.public.demoData,
+      dualMode: deps.config.public.dualMode,
+      appMode: deps.config.public.appMode,
+      modesAvailable: deps.config.public.modesAvailable,
+      liveFixtureId: deps.config.public.liveFixtureId,
       demoControlConfigured,
       counters: deps.counters?.snapshot() ?? null,
     });

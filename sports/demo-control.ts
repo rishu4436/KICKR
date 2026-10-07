@@ -1,8 +1,8 @@
 /**
  * DEMO-only match control: advance seeded demo matches and inject scoring waves.
- * Completely disabled unless SPORTS_PROVIDER=DEMO and DEMO_CONTROL_TOKEN is set
+ * Enabled when (SPORTS_PROVIDER=DEMO or APP_MODE=DEMO|DUAL) and DEMO_CONTROL_TOKEN is set
  * and the caller presents a matching x-demo-control-token header.
- * Never available under Sportmonks or LOCAL_DEV. Never grants RUN_SETTLEMENT.
+ * Never operates on LIVE/Sportmonks matches. Never grants RUN_SETTLEMENT.
  */
 import { timingSafeEqual } from "node:crypto";
 import type { AuditStore } from "../audit/types.js";
@@ -34,6 +34,8 @@ export interface DemoControlGate {
   sportsProvider: string;
   /** Raw configured token; empty/undefined means control is off. */
   demoControlToken: string | undefined | null;
+  /** APP_MODE — DEMO and DUAL may enable control; LIVE never. */
+  appMode?: "LIVE" | "DEMO" | "DUAL" | null;
 }
 
 export interface DemoControlDeps {
@@ -46,21 +48,25 @@ export interface DemoControlDeps {
 }
 
 export function isDemoControlConfigured(gate: DemoControlGate): boolean {
-  const provider = gate.sportsProvider.trim().toLowerCase().replace(/_/g, "-");
   const token = (gate.demoControlToken ?? "").trim();
-  return provider === "demo" && token.length >= 16;
+  if (token.length < 16) return false;
+  if (gate.appMode === "LIVE") return false;
+  if (gate.appMode === "DEMO" || gate.appMode === "DUAL") return true;
+  const provider = gate.sportsProvider.trim().toLowerCase().replace(/_/g, "-");
+  return provider === "demo";
 }
 
 export function assertDemoControlToken(
   gate: DemoControlGate,
   provided: string | undefined | null,
 ): void {
-  const provider = gate.sportsProvider.trim().toLowerCase().replace(/_/g, "-");
-  if (provider !== "demo") {
+  if (!isDemoControlConfigured(gate)) {
     throw new AppError(
       "DEMO_CONTROL_DISABLED",
       403,
-      "Demo match control requires SPORTS_PROVIDER=DEMO",
+      gate.appMode === "LIVE"
+        ? "Demo match control is unavailable in LIVE mode"
+        : "Demo match control requires APP_MODE=DEMO|DUAL (or SPORTS_PROVIDER=DEMO) and DEMO_CONTROL_TOKEN",
     );
   }
   const expected = (gate.demoControlToken ?? "").trim();
@@ -79,6 +85,18 @@ export function assertDemoControlToken(
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
     throw new AppError("DEMO_CONTROL_FORBIDDEN", 403, "Invalid demo control token");
+  }
+}
+
+async function assertDemoMatch(deps: DemoControlDeps, matchId: string): Promise<void> {
+  const match = await deps.football.getMatch(matchId);
+  if (!match) throw new AppError("NOT_FOUND", 404, "Match not found");
+  if (match.dataSource.provider !== DEMO_PROVIDER_NAME) {
+    throw new AppError(
+      "DEMO_CONTROL_DISABLED",
+      403,
+      "Demo match control refuses LIVE/Sportmonks fixtures (DEMO DATA only)",
+    );
   }
 }
 
@@ -101,6 +119,7 @@ export async function demoAdvanceMatchForward(
   matchId: string,
   to: MatchState,
 ): Promise<{ matchId: string; status: string }> {
+  await assertDemoMatch(deps, matchId);
   const ctx: RequestContext = {
     now: deps.clock(),
     correlationId: `demo-control-advance-${matchId}-${to}`,
@@ -136,6 +155,7 @@ export async function demoAdvanceMatchAlongPath(
   matchId: string,
   until: MatchState,
 ): Promise<{ matchId: string; status: string; steps: string[] }> {
+  await assertDemoMatch(deps, matchId);
   const match = await deps.football.getMatch(matchId);
   if (!match) throw new AppError("NOT_FOUND", 404, "Match not found");
   if (!DEMO_MATCH_FORWARD_PATH.includes(until) && until !== "LINEUPS_AVAILABLE") {
@@ -175,6 +195,7 @@ export async function demoInjectScoringWave(
   deps: DemoControlDeps,
   matchId: string,
 ): Promise<{ inserted: number }> {
+  await assertDemoMatch(deps, matchId);
   const events = demoEvents(matchId);
   let inserted = 0;
   for (const event of events) {
@@ -236,6 +257,7 @@ export async function demoRebuildScores(
     rank: number;
   }>;
 }> {
+  await assertDemoMatch(deps, matchId);
   const ctx: RequestContext = {
     now: deps.clock(),
     correlationId: `demo-control-score-${matchId}`,
@@ -278,6 +300,7 @@ export async function demoFinalizeFreeContests(
   finalized: Array<{ contestId: string; rows: number }>;
   runSettlement: false;
 }> {
+  await assertDemoMatch(deps, matchId);
   const ctx: RequestContext = {
     now: deps.clock(),
     correlationId: `demo-control-finalize-${matchId}`,
