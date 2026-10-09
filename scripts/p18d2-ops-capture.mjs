@@ -1,3 +1,4 @@
+/* global process, fetch, TextEncoder, sessionStorage, console */
 /**
  * Capture Match Ops screenshots with a CEO_HEAD staff session.
  */

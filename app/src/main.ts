@@ -29,12 +29,12 @@ import {
   playerChip,
   lbRowHtml,
   freshnessBannerHtml,
-  freshnessChipLabel,
   shareCardHtml,
   onboardingChecklistHtml,
   resultHeroHtml,
 } from "./format.js";
 import { landingPageHtml } from "./format-landing.js";
+import { watchLeaderboard } from "./live-board.js";
 
 Object.assign(globalThis, { Buffer });
 
@@ -569,7 +569,7 @@ function shell(title: string, body: string): string {
   const accountCurrent = hash.startsWith("#/account");
   return `<div class="shell">
     <div class="top">
-      <a class="brand" href="#/">KICKR</a>
+      <a class="brand" href="#/" aria-label="KICKR home"><span class="brand-symbol" aria-hidden="true">↗</span>KICKR<span class="brand-dot">.</span></a>
       ${modeSwitchHtml()}
       <div class="nav nav-desktop">
         <a href="#/" ${matchesCurrent ? 'aria-current="page"' : ""}>Matches</a>
@@ -601,6 +601,12 @@ function setAuthNote(message: string): void {
 }
 
 function bindLandingAuth(): void {
+  for (const link of document.querySelectorAll<HTMLAnchorElement>("[data-scroll]")) {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      document.getElementById(link.dataset.scroll ?? "")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
   const afterSignIn = () => {
     location.hash = "#/";
     void render();
@@ -684,7 +690,11 @@ function empty(label: string): string {
   return `<div class="empty">${escapeText(label)}</div>`;
 }
 
+let stopLiveBoard: (() => void) | undefined;
+
 async function render(): Promise<void> {
+  stopLiveBoard?.();
+  stopLiveBoard = undefined;
   state.error = null;
   await runtimeEnvironment();
   const hash = route();
@@ -851,11 +861,11 @@ async function renderList(): Promise<void> {
   state.creditCap = creditCap;
   state.maxPlayersFromOneTeam = maxFromOne;
 
-  const realCard = (match: MatchCard, cta: string) => `<article class="card">
+  const realCard = (match: MatchCard, cta: string) => `<article class="card match-card">
       <div class="meta"><span>${escapeText(match.competition)}</span>${statusChip(match.status, match.bucket)}<span>${match.canBuildXi ? "XI open" : "XI locked"}</span></div>
       ${matchTile(match)}
-      <div class="row">
-        <button class="ghost" data-contests="${match.id}" data-mode="${isTutorialMatch(match) ? "DEMO" : "LIVE"}">Contests</button>
+      <div class="row match-card-footer">
+        <button class="ghost" data-contests="${match.id}" data-mode="${isTutorialMatch(match) ? "DEMO" : "LIVE"}">View contests</button>
         <button class="primary" data-build="${match.id}" data-mode="${isTutorialMatch(match) ? "DEMO" : "LIVE"}" ${match.canBuildXi ? "" : "disabled"}>${cta}</button>
       </div>
     </article>`;
@@ -880,12 +890,12 @@ async function renderList(): Promise<void> {
   }).join("");
 
   const section = (title: string, cards: string) => cards
-    ? `<section class="match-section"><h2 class="section-title">${title}</h2>${cards}</section>`
+    ? `<section class="match-section"><h2 class="section-title">${title}</h2><div class="match-grid">${cards}</div></section>`
     : "";
 
   app.innerHTML = shell("Matches", `
     ${onboard}
-    ${tutorialCards ? `<section class="match-section tutorial-section">${tutorialCards}</section>` : ""}
+    ${tutorialCards ? `<section class="match-section tutorial-section"><div class="match-grid">${tutorialCards}</div></section>` : ""}
     ${section("Live Now", liveMatches.map((m) => realCard(m, m.canBuildXi ? "Build XI" : "View live")).join(""))}
     ${section("Upcoming", upcoming.map((m) => realCard(m, "Build XI")).join(""))}
     ${section("Results", results.map((m) => realCard(m, "View result")).join(""))}
@@ -1178,87 +1188,67 @@ async function renderMyContests(): Promise<void> {
   }
 }
 
+interface ContestBoard {
+  freshness?: string;
+  timestamps?: { updatedAt?: string };
+  leaderboard: Array<{ wallet: string; rank: number; milliPoints: number; priorRank?: number | null; scoreDelta?: number | null }>;
+}
+
+function boardRows(rows: ContestBoard["leaderboard"]): string {
+  return rows.map((row) => lbRowHtml({ ...row, label: shortWallet(row.wallet), you: row.wallet === state.walletAddress })).join("") || empty("No scored entries yet. Your matchday is just getting started.");
+}
+
+function mountLiveBoard(matchId: string, refresh: (signal: AbortSignal) => Promise<boolean>): void {
+  const status = document.querySelector<HTMLElement>("#board-status");
+  if (!state.token || !status) return;
+  stopLiveBoard?.();
+  stopLiveBoard = watchLeaderboard({ matchId, token: state.token, refresh, status: (message, connected) => {
+    if (!status.isConnected) return;
+    status.textContent = message;
+    status.dataset.connected = String(connected);
+  } });
+}
+
 async function renderLeaderboard(contestId: string): Promise<void> {
+  const currentRoute = location.hash;
   app.innerHTML = shell("Leaderboard", loading());
-  const contestResp = await api<{ contest: ContestCard }>(`/contests/${contestId}`);
-  const card = contestResp.contest;
+  const { contest: card } = await api<{ contest: ContestCard }>(`/contests/${contestId}`);
   let matchLabel = "";
   if (card.matchId) {
-    try {
-      const matchResp = await api<{ match: MatchCard }>(`/matches/${card.matchId}`);
-      card.matchStatus = matchResp.match.status;
-      card.lifecycleBucket = classifyContestLifecycle({
-        matchStatus: matchResp.match.status,
-        hasFinalResult: card.hasFinalResult,
-      });
-      card.primaryCta = contestPrimaryCta(card.lifecycleBucket);
-      matchLabel = matchTitle(matchResp.match);
-    } catch {
-      /* keep defaults */
-    }
+    const { match } = await api<{ match: MatchCard }>(`/matches/${card.matchId}`);
+    card.matchStatus = match.status;
+    card.lifecycleBucket = classifyContestLifecycle({ matchStatus: match.status, hasFinalResult: card.hasFinalResult });
+    matchLabel = matchTitle(match);
   }
-  let updatedAt: string | null = null;
-  let freshness: string | null = null;
-  let staleNote = "";
-  let rowsHtml: string;
-  try {
-    const board = await api<{
-      freshness?: string;
-      timestamps?: { updatedAt?: string };
-      leaderboard: Array<{
-        entryId: string;
-        contestId: string;
-        wallet: string;
-        milliPoints: number;
-        rank: number;
-        priorRank?: number | null;
-        scoreDelta?: number | null;
-      }>;
-    }>(`/contests/${contestId}/leaderboard`);
-    freshness = board.freshness ?? null;
-    updatedAt = board.timestamps?.updatedAt ?? null;
-    // Server already contest-scopes + re-ranks; never display global match ranks.
-    if (board.leaderboard.length) {
-      rowsHtml = board.leaderboard.map((row) =>
-        lbRowHtml({
-          rank: row.rank,
-          label: shortWallet(row.wallet),
-          milliPoints: row.milliPoints,
-          you: row.wallet === state.walletAddress,
-          priorRank: row.priorRank,
-          scoreDelta: row.scoreDelta,
-        }),
-      ).join("");
-    } else {
-      rowsHtml = empty("No scored entries yet for this contest.");
+  let board: ContestBoard | null = null;
+  try { board = await api<ContestBoard>(`/contests/${contestId}/leaderboard`); } catch { /* Retry through live reconciliation. */ }
+  if (location.hash !== currentRoute) return;
+  const completed = board?.freshness === "FINAL" || resolveLifecycle(card) === "completed";
+  app.innerHTML = shell(completed ? "Final standings" : "The leaderboard", `
+    <div class="lb-head"><div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span></div><span class="board-status" id="board-status" role="status">${completed ? "Final result" : "Connecting…"}</span></div>
+    <p class="quiet">${escapeText(matchLabel)}</p>
+    <div id="board-freshness">${freshnessBannerHtml(board?.freshness, { demoData: state.demoData })}</div>
+    <article class="card"><div class="pool-caption"><span>RANK / PLAYER</span><span>POINTS</span></div><div class="leaderboard" id="live-board">${board ? boardRows(board.leaderboard) : empty("Could not load scores. Retrying…")}</div></article>
+    <div class="row"><a class="back-link" href="#/my-contests">← My contests</a><button class="primary" id="to-result">${completed ? "View result ↗" : "My result ↗"}</button></div>
+    <p class="quiet" id="board-updated">${board?.timestamps?.updatedAt ? `Updated ${escapeText(formatUpdated(board.timestamps.updatedAt))}` : ""}</p>`);
+  document.querySelector("#to-result")?.addEventListener("click", () => { location.hash = `#/contests/${contestId}/result`; });
+  void markLeaderboardViewed();
+  const rows = document.querySelector("#live-board");
+  const freshness = document.querySelector("#board-freshness");
+  const updated = document.querySelector("#board-updated");
+  if (card.matchId && !completed) mountLiveBoard(card.matchId, async (signal) => {
+    const next = await api<ContestBoard>(`/contests/${contestId}/leaderboard`, { signal });
+    if (signal.aborted || !rows?.isConnected) return false;
+    rows.innerHTML = boardRows(next.leaderboard);
+    if (freshness) freshness.innerHTML = freshnessBannerHtml(next.freshness, { demoData: state.demoData });
+    if (updated) updated.textContent = next.timestamps?.updatedAt ? `Updated ${formatUpdated(next.timestamps.updatedAt)}` : "";
+    if (next.freshness === "FINAL") {
+      const title = document.querySelector(".page-title");
+      if (title) title.textContent = "Final standings";
+      const result = document.querySelector("#to-result");
+      if (result) result.textContent = "View result ↗";
     }
-    staleNote = freshnessBannerHtml(freshness, { demoData: state.demoData });
-  } catch {
-    rowsHtml = empty("Could not load leaderboard.");
-  }
-  markLeaderboardViewed();
-  const bucket = resolveLifecycle(card);
-  const live = bucket === "live";
-  const resultBtn = bucket === "completed"
-    ? `<button class="primary" id="to-result">View result</button>`
-    : `<button class="ghost" id="to-result">My result</button>`;
-  app.innerHTML = shell(live ? "Live leaderboard" : "Leaderboard", `
-    <div class="lb-head">
-      <div class="meta">${contestBadge(card)}<span>${escapeText(contestTitle(card))}</span>${live ? '<span class="badge badge-live">LIVE</span>' : statusChip(card.matchStatus ?? bucket, bucket)}</div>
-      <div class="quiet">Updated ${escapeText(formatUpdated(updatedAt))}${freshness ? ` · ${escapeText(freshnessChipLabel(freshness, { demoData: state.demoData }))}` : ""}</div>
-    </div>
-    ${matchLabel ? `<p class="quiet" style="margin:4px 0 12px">${escapeText(matchLabel)}</p>` : ""}
-    ${staleNote}
-    <article class="card" style="margin-top:8px">
-      <div class="leaderboard">${rowsHtml}</div>
-    </article>
-    <div class="row" style="margin-top:16px">
-      <a class="back-link" href="#/my-contests">← My Contests</a>
-      ${resultBtn}
-    </div>
-  `);
-  document.querySelector("#to-result")?.addEventListener("click", () => {
-    location.hash = `#/contests/${contestId}/result`;
+    return next.freshness === "FINAL";
   });
 }
 
@@ -1451,6 +1441,7 @@ async function startClaim(contestId: string, entryId: string, target: Element): 
 }
 
 async function renderBuilder(matchId: string): Promise<void> {
+  const currentRoute = location.hash;
   app.innerHTML = shell("Build your XI", loading());
   let matchResp = await api<{ match: MatchCard }>(`/matches/${matchId}`).catch(async () => {
     setSelectedMode("DEMO");
@@ -1468,17 +1459,16 @@ async function renderBuilder(matchId: string): Promise<void> {
     latest: { id: string; version: number; playerIds: string[]; captainId: string; viceId: string; creditsUsed: number } | null;
     readOnly: boolean;
   }>(`/matches/${matchId}/my-team`);
+  if (location.hash !== currentRoute) return;
   const players = playersResp.players;
-  const creditCap = rulesResp.creditCap;
-  const maxFromOne = rulesResp.maxPlayersFromOneTeam;
+  const { creditCap, maxPlayersFromOneTeam } = rulesResp;
+  const match = matchResp.match;
+  const tutorial = isTutorialMatch(match);
   state.creditCap = creditCap;
-  state.maxPlayersFromOneTeam = maxFromOne;
-  const readOnly = saved.readOnly || !matchResp.match.canBuildXi;
-  // Reload latest saved XI when returning to this match (unless user already has an in-memory draft for it).
+  state.maxPlayersFromOneTeam = maxPlayersFromOneTeam;
+  const readOnly = saved.readOnly || !match.canBuildXi;
   if (saved.latest && (state.teamMatchId !== matchId || state.draft.playerIds.length === 0)) {
-    state.draft.playerIds = [...saved.latest.playerIds];
-    state.draft.captainId = saved.latest.captainId;
-    state.draft.viceId = saved.latest.viceId;
+    state.draft = { ...state.draft, playerIds: [...saved.latest.playerIds], captainId: saved.latest.captainId, viceId: saved.latest.viceId };
     state.teamVersionId = saved.latest.id;
     state.teamMatchId = matchId;
     sessionStorage.setItem("kickr.dev.teamVersion", saved.latest.id);
@@ -1488,203 +1478,120 @@ async function renderBuilder(matchId: string): Promise<void> {
     state.teamVersionId = null;
     state.teamMatchId = matchId;
   }
-  const savedTeamId = saved.team?.id ?? null;
   const byId = new Map(players.map((p) => [p.playerId, p]));
-  const used = calculateCreditsUsed(state.draft.playerIds.map((id) => byId.get(id)?.credit ?? 0));
-  const left = remainingCredits(used, creditCap);
-  const homeClubId = matchResp.match.home.id;
-  const awayClubId = matchResp.match.away.id;
-  const validation = validateFantasyTeam(
-    {
-      playerIds: state.draft.playerIds,
-      captainId: state.draft.captainId,
-      viceId: state.draft.viceId,
-    },
-    players.map((p) => ({
-      playerId: p.playerId,
-      position: p.position,
-      clubId: p.clubId,
-      credit: p.credit,
-    })),
-    homeClubId,
-    awayClubId,
-    { creditCap, maxPlayersFromOneTeam: maxFromOne },
-  );
-
-  const slot = (pos: "GK" | "DEF" | "MID" | "FWD") =>
-    state.draft.playerIds
-      .map((id) => byId.get(id))
-      .filter((p): p is PoolPlayer => !!p && p.position === pos)
-      .map((p) =>
-        playerChip({
-          displayName: p.displayName,
-          shortName: p.shortName,
-          role: p.playerId === state.draft.captainId ? "C" : p.playerId === state.draft.viceId ? "VC" : "",
-          selected: true,
-        }),
-      )
-      .join("") || `<div class="chip quiet">${pos}</div>`;
-
-  const filtered = players.filter((p) => {
-    if (state.draft.filter !== "ALL" && p.position !== state.draft.filter) return false;
-    if (state.draft.query && !`${p.displayName} ${p.clubName}`.toLowerCase().includes(state.draft.query.toLowerCase())) return false;
-    return true;
-  });
-
-  const selectedCount = state.draft.playerIds.length;
-  const formation = formationLabel(state.draft.playerIds.map((id) => byId.get(id)?.position ?? "MID"));
-  const meterClass = left <= 0 ? "meter full" : left <= 10 ? "meter warn" : "meter";
-  const title = matchTitle(matchResp.match);
-  const tutorialBanner = isTutorialMatch(matchResp.match)
-    ? `<div class="meta" style="margin-bottom:10px"><span class="tutorial-kicker">TUTORIAL MATCH · SIMULATED</span><span class="badge badge-free">FREE</span></div>`
-    : "";
-  const lockBanner = readOnly
-    ? `<div class="lock-banner"><strong>Read-only</strong><span>Match is locked — you can review this XI but not change it.</span></div>`
-    : "";
-  const validationHtml = validation.valid
-    ? ""
-    : `<ul class="errors">${validation.errors.map((e) => `<li>${escapeText(e.message)}</li>`).join("")}</ul>`;
-
-  app.innerHTML = shell(readOnly ? "Your XI" : "Build your XI", `
-    ${tutorialBanner}
-    <div class="xi-toolbar">
-      <a class="back-link" href="${isTutorialMatch(matchResp.match) ? `#/tutorial/${matchId}` : `#/matches/${matchId}`}">← <strong>${escapeText(title)}</strong></a>
-      <div class="meta">
-        <span class="badge badge-state">${escapeText(formation)}</span>
-        <span class="quiet">${selectedCount}/11 selected</span>
-        ${state.draft.captainId ? '<span class="badge badge-c">C</span>' : ""}
-        ${state.draft.viceId ? '<span class="badge badge-vc">VC</span>' : ""}
-      </div>
-    </div>
-    ${lockBanner}
-    <article class="card xi-hero-card">
-      <div class="credits-panel">
-        <div>
-          <div class="quiet">Credits remaining</div>
-          <div class="credits-left">${left}</div>
-        </div>
-        <div class="xi-count">${used} / ${creditCap} used</div>
-      </div>
-      <div class="${meterClass}"><span style="width:${Math.min(100, (used / creditCap) * 100)}%"></span></div>
-      <div class="pitch" style="margin-top:16px">
-        <div class="line">${slot("FWD")}</div>
-        <div class="line">${slot("MID")}</div>
-        <div class="line">${slot("DEF")}</div>
-        <div class="line">${slot("GK")}</div>
-      </div>
-      ${validationHtml}
-      <div class="xi-save-bar">
-        ${readOnly
-          ? `<span class="pill badge-paid">LOCKED XI</span>`
-          : `<button class="primary" id="save-xi" ${validation.valid ? "" : "disabled"}>Save XI</button>`}
-        <button class="ghost" id="to-contests">${readOnly ? "View contests" : "Choose contest"}</button>
-      </div>
-      <p class="note" id="saved">${saved.latest && !readOnly ? `Loaded saved XI v${saved.latest.version} · ${saved.latest.creditsUsed} credits` : readOnly && saved.latest ? `Locked XI v${saved.latest.version}` : "Pick 11 players, then set Captain (C) and Vice (VC)."}</p>
-    </article>
-    ${readOnly ? "" : `
-    <div class="filters">
-      ${(["ALL", "GK", "DEF", "MID", "FWD"] as const).map((f) => `<button type="button" data-filter="${f}" aria-pressed="${state.draft.filter === f}">${f}</button>`).join("")}
-    </div>
-    <input class="search" id="q" placeholder="Search players by name" value="${escapeText(state.draft.query)}" ${readOnly ? "disabled" : ""} />
-    <div class="stack">
-      ${filtered.map((p) => {
-        const selected = state.draft.playerIds.includes(p.playerId);
-        const isC = state.draft.captainId === p.playerId;
-        const isVc = state.draft.viceId === p.playerId;
-        return `<div class="player${selected ? " selected" : ""}">
-          <div class="avatar">${escapeText(initials(p.displayName))}</div>
-          <div><strong>${escapeText(p.displayName)}</strong><div class="quiet">${escapeText(p.position)} · ${escapeText(p.clubName)} · ${p.credit} cr</div></div>
-          <div class="actions">
-            <button class="ghost" data-toggle="${p.playerId}" ${readOnly ? "disabled" : ""}>${selected ? "Remove" : "Add"}</button>
-            ${selected ? `<button class="ghost" data-cap="${p.playerId}" aria-pressed="${isC}" title="Set captain">C</button><button class="ghost" data-vice="${p.playerId}" aria-pressed="${isVc}" title="Set vice-captain">VC</button>` : ""}
-          </div>
-        </div>`;
-      }).join("") || empty("No players match this filter.")}
-    </div>`}
-  `);
-
-  const qEl = document.querySelector<HTMLInputElement>("#q");
-  if (qEl && document.activeElement === qEl) {
-    const pos = qEl.selectionStart ?? qEl.value.length;
-    qEl.focus();
-    try { qEl.setSelectionRange(pos, pos); } catch { /* ignore */ }
-  }
-  qEl?.addEventListener("input", (event) => {
+  const validationPool = players.map((p) => ({ playerId: p.playerId, position: p.position, clubId: p.clubId, credit: p.credit }));
+  let saving = false;
+  let savedTeamId = saved.team?.id ?? null;
+  const validate = () => validateFantasyTeam(state.draft, validationPool, match.home.id, match.away.id, { creditCap, maxPlayersFromOneTeam });
+  const selectedPlayers = () => state.draft.playerIds.map((id) => byId.get(id)).filter((p): p is PoolPlayer => Boolean(p));
+  const initialNote = saved.latest ? `${readOnly ? "Locked" : "Loaded"} XI · Version ${saved.latest.version}` : "Your team starts here. Make your first pick.";
+  app.innerHTML = shell(readOnly ? "Your starting XI" : "Build your XI", `
+    ${tutorial ? '<div class="meta" style="margin-bottom:10px"><span class="tutorial-kicker">TUTORIAL MATCH · SIMULATED</span><span class="badge badge-free">FREE</span></div>' : ""}
+    <div class="xi-toolbar"><a class="back-link" href="${tutorial ? `#/tutorial/${matchId}` : `#/matches/${matchId}`}">← <strong>${escapeText(matchTitle(match))}</strong></a><span class="quiet">${readOnly ? "LINEUP LOCKED" : "YOUR PICKS. YOUR GAME."}</span></div>
+    ${readOnly ? '<div class="lock-banner"><strong>Read-only</strong><span>Kickoff has passed. Your XI is locked for this match.</span></div>' : ""}
+    <div class="builder-layout" id="builder">
+      ${readOnly ? "" : `<section class="builder-pool card" aria-labelledby="pool-heading"><div class="row"><h2 id="pool-heading">The player pool</h2><span class="quiet">${players.length} players</span></div><p class="quiet">Pick 11. Make them count.</p><label class="sr-only" for="q">Search players or clubs</label><input class="search" id="q" type="search" placeholder="Search players or clubs…" autocomplete="off" value="${escapeText(state.draft.query)}" /><div class="filters" aria-label="Filter by position">${["ALL", "GK", "DEF", "MID", "FWD"].map((f) => `<button type="button" data-filter="${f}" aria-pressed="${state.draft.filter === f}">${f === "ALL" ? "All players" : f}</button>`).join("")}</div><div class="pool-caption"><span>PLAYER / CLUB</span><span>CREDITS / SELECT</span></div><div class="player-list" id="player-list"></div></section>`}
+      <aside class="builder-summary" aria-label="Your selected team"><div class="builder-summary-top"><h2>Your starting XI</h2><span class="badge badge-state" id="formation"></span></div><div class="builder-summary-body" id="xi-summary"></div><div class="xi-save-bar">${readOnly ? '<span class="badge badge-state">LOCKED XI</span>' : '<button class="primary" id="save-xi">Save XI ↗</button>'}<button class="ghost" id="to-contests">View contests</button></div><p class="note" id="saved" role="status">${initialNote}</p></aside>
+    </div>`);
+  const builder = document.querySelector<HTMLElement>("#builder");
+  if (!builder) return;
+  if (readOnly) builder.style.gridTemplateColumns = "minmax(0, 650px)";
+  const paintSummary = () => {
+    const selected = selectedPlayers();
+    const used = calculateCreditsUsed(selected.map((p) => p.credit));
+    const left = remainingCredits(used, creditCap);
+    const result = validate();
+    const slot = (position: string) => selected.filter((p) => p.position === position).map((p) => playerChip({ displayName: p.displayName, selected: true, role: p.playerId === state.draft.captainId ? "C" : p.playerId === state.draft.viceId ? "VC" : "" })).join("") || `<div class="chip quiet">${position}</div>`;
+    const formation = builder.querySelector("#formation");
+    if (formation) formation.textContent = `${formationLabel(selected.map((p) => p.position))} · ${selected.length}/11`;
+    const summary = builder.querySelector("#xi-summary");
+    if (summary) summary.innerHTML = `<div class="credits-panel"><div><div class="quiet">Credits remaining</div><div class="credits-left">${left}</div></div><div class="xi-count">${used} / ${creditCap}</div></div><div class="meter${left < 0 ? " full" : left <= 10 ? " warn" : ""}"><span style="width:${Math.max(0, Math.min(100, used / creditCap * 100))}%"></span></div><div class="pitch"><div class="line">${slot("FWD")}</div><div class="line">${slot("MID")}</div><div class="line">${slot("DEF")}</div><div class="line">${slot("GK")}</div></div>${readOnly ? "" : `<p class="builder-guidance${result.valid ? " ready" : ""}">${result.valid ? "✓ Your XI is ready. Save it and find your rivals." : selected.length < 11 ? `Choose ${11 - selected.length} more player${selected.length === 10 ? "" : "s"}. 1 GK · 3–5 DEF · 3–5 MID · 1–3 FWD.` : "Set your captain (2×) and vice-captain (1.5×)."}</p>${selected.length === 11 && !result.valid ? `<ul class="builder-errors">${result.errors.map((e) => `<li>${escapeText(e.message)}</li>`).join("")}</ul>` : ""}`}`;
+    const save = builder.querySelector<HTMLButtonElement>("#save-xi");
+    if (save) { save.disabled = saving || !result.valid; save.textContent = saving ? "Saving…" : "Save XI ↗"; }
+    const next = builder.querySelector<HTMLButtonElement>("#to-contests");
+    if (next) next.disabled = saving;
+  };
+  const paintPlayers = () => {
+    const list = builder.querySelector("#player-list");
+    if (!list) return;
+    const query = state.draft.query.trim().toLowerCase();
+    const filtered = players.filter((p) => (state.draft.filter === "ALL" || p.position === state.draft.filter) && `${p.displayName} ${p.clubName}`.toLowerCase().includes(query));
+    list.innerHTML = filtered.map((p) => {
+      const selected = state.draft.playerIds.includes(p.playerId);
+      return `<div class="player${selected ? " selected" : ""}"><div class="avatar">${escapeText(initials(p.displayName))}</div><div><strong>${escapeText(p.displayName)}</strong><div class="quiet">${escapeText(p.position)} · ${escapeText(p.clubName)}</div></div><div class="actions"><span class="player-credit">${p.credit}<small>CR</small></span>${selected ? `<button type="button" class="ghost" data-cap="${p.playerId}" aria-label="Captain ${escapeText(p.displayName)}" aria-pressed="${p.playerId === state.draft.captainId}" ${saving ? "disabled" : ""}>C</button><button type="button" class="ghost" data-vice="${p.playerId}" aria-label="Vice-captain ${escapeText(p.displayName)}" aria-pressed="${p.playerId === state.draft.viceId}" ${saving ? "disabled" : ""}>VC</button>` : ""}<button type="button" class="ghost" data-toggle="${p.playerId}" aria-label="${selected ? "Remove" : "Add"} ${escapeText(p.displayName)}" aria-pressed="${selected}" ${saving || (!selected && state.draft.playerIds.length >= 11) ? "disabled" : ""}>${selected ? "−" : "+"}</button></div></div>`;
+    }).join("") || empty("No players found. Try another name or position.");
+  };
+  builder.querySelector<HTMLInputElement>("#q")?.addEventListener("input", (event) => {
     state.draft.query = (event.target as HTMLInputElement).value;
-    void renderBuilder(matchId);
+    paintPlayers();
   });
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-filter]")) {
-    button.addEventListener("click", () => {
-      state.draft.filter = button.dataset.filter ?? "ALL";
-      void renderBuilder(matchId);
-    });
-  }
-  if (!readOnly) {
-    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
-      button.addEventListener("click", () => {
-        const id = button.dataset.toggle ?? "";
-        if (state.draft.playerIds.includes(id)) {
-          state.draft.playerIds = state.draft.playerIds.filter((x) => x !== id);
-          if (state.draft.captainId === id) state.draft.captainId = "";
-          if (state.draft.viceId === id) state.draft.viceId = "";
-        } else if (state.draft.playerIds.length < 11) {
-          const player = byId.get(id);
-          if (!player) return;
-          // Harden: block adds that break formation caps or credit budget.
-          const counts: Record<string, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 };
-          for (const pid of state.draft.playerIds) {
-            const p = byId.get(pid);
-            if (p) counts[p.position] = (counts[p.position] ?? 0) + 1;
+  builder.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
+    if (!button || button.disabled) return;
+    if (button.id === "to-contests") { location.hash = `#/matches/${matchId}/contests`; return; }
+    if (readOnly || saving) return;
+    if (button.dataset.filter) {
+      state.draft.filter = button.dataset.filter;
+      for (const tab of builder.querySelectorAll<HTMLButtonElement>("[data-filter]")) tab.setAttribute("aria-pressed", String(tab.dataset.filter === state.draft.filter));
+      paintPlayers();
+      return;
+    }
+    if (button.id === "save-xi") {
+      if (!validate().valid) return;
+      const selection = { playerIds: [...state.draft.playerIds], captainId: state.draft.captainId, viceId: state.draft.viceId };
+      saving = true;
+      paintSummary(); paintPlayers();
+      void (async () => {
+        const note = builder.querySelector("#saved");
+        try {
+          // Retain a newly created team even if saving its version fails.
+          if (!savedTeamId) {
+            const created = await api<{ team: { id: string } }>("/teams", { method: "POST", body: JSON.stringify({ matchId }) });
+            savedTeamId = created.team.id;
           }
-          const maxPos: Record<string, number> = { GK: 1, DEF: 5, MID: 5, FWD: 3 };
-          if ((counts[player.position] ?? 0) >= (maxPos[player.position] ?? 0)) {
-            const note = document.querySelector("#saved");
-            if (note) note.textContent = `Formation limit: max ${maxPos[player.position]} ${player.position}.`;
-            return;
-          }
-          const nextUsed = used + player.credit;
-          if (nextUsed > creditCap) {
-            const note = document.querySelector("#saved");
-            if (note) note.textContent = `Over budget: ${player.displayName} is ${player.credit} cr (${nextUsed}/${creditCap}).`;
-            return;
-          }
-          if (maxFromOne != null) {
-            const fromClub = state.draft.playerIds.filter((pid) => byId.get(pid)?.clubId === player.clubId).length;
-            if (fromClub >= maxFromOne) {
-              const note = document.querySelector("#saved");
-              if (note) note.textContent = `Club limit: max ${maxFromOne} from one side.`;
-              return;
-            }
-          }
-          state.draft.playerIds = [...state.draft.playerIds, id];
+          await saveXi(matchId, savedTeamId, selection, currentRoute);
+        } catch (error) {
+          if (note) note.textContent = error instanceof Error ? error.message : "Could not save your XI. Try again.";
+        } finally {
+          saving = false;
+          if (builder.isConnected) { paintSummary(); paintPlayers(); }
         }
-        void renderBuilder(matchId);
-      });
+      })();
+      return;
     }
-    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-cap]")) {
-      button.addEventListener("click", () => {
-        state.draft.captainId = button.dataset.cap ?? "";
-        if (state.draft.viceId === state.draft.captainId) state.draft.viceId = "";
-        void renderBuilder(matchId);
-      });
+    const id = button.dataset.toggle ?? button.dataset.cap ?? button.dataset.vice;
+    if (!id || !byId.has(id)) return;
+    if (button.dataset.toggle) {
+      if (state.draft.playerIds.includes(id)) {
+        state.draft.playerIds = state.draft.playerIds.filter((p) => p !== id);
+        if (state.draft.captainId === id) state.draft.captainId = "";
+        if (state.draft.viceId === id) state.draft.viceId = "";
+      } else if (state.draft.playerIds.length < 11) state.draft.playerIds.push(id);
+    } else if (button.dataset.cap) {
+      state.draft.captainId = id;
+      if (state.draft.viceId === id) state.draft.viceId = "";
+    } else {
+      state.draft.viceId = id;
+      if (state.draft.captainId === id) state.draft.captainId = "";
     }
-    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-vice]")) {
-      button.addEventListener("click", () => {
-        state.draft.viceId = button.dataset.vice ?? "";
-        if (state.draft.captainId === state.draft.viceId) state.draft.captainId = "";
-        void renderBuilder(matchId);
-      });
-    }
-    document.querySelector("#save-xi")?.addEventListener("click", () => {
-      void saveXi(matchId, savedTeamId);
-    });
-  }
-  document.querySelector("#to-contests")?.addEventListener("click", () => {
-    location.hash = `#/matches/${matchId}/contests`;
+    state.teamVersionId = null;
+    sessionStorage.removeItem("kickr.dev.teamVersion");
+    const note = builder.querySelector("#saved");
+    if (note) note.textContent = "Unsaved changes · Save your XI before joining a contest.";
+    paintSummary(); paintPlayers();
+    // Keep keyboard navigation on the action that was just updated.
+    const attribute = button.dataset.toggle ? "data-toggle" : button.dataset.cap ? "data-cap" : "data-vice";
+    builder.querySelector<HTMLButtonElement>(`[${attribute}="${id}"]`)?.focus({ preventScroll: true });
   });
+  paintSummary(); paintPlayers();
 }
 
-async function saveXi(matchId: string, existingTeamId: string | null = null): Promise<void> {
+async function saveXi(
+  matchId: string,
+  existingTeamId: string | null,
+  selection: Pick<Draft, "playerIds" | "captainId" | "viceId">,
+  sourceRoute: string,
+): Promise<void> {
   let teamId = existingTeamId;
   if (!teamId) {
     const created = await api<{ team: { id: string } }>("/teams", {
@@ -1697,13 +1604,11 @@ async function saveXi(matchId: string, existingTeamId: string | null = null): Pr
     `/teams/${teamId}/versions`,
     {
       method: "POST",
-      body: JSON.stringify({
-        playerIds: state.draft.playerIds,
-        captainId: state.draft.captainId,
-        viceId: state.draft.viceId,
-      }),
+      body: JSON.stringify(selection),
     },
   );
+  // A completed save must not overwrite another match's draft or redirect a new page.
+  if (location.hash !== sourceRoute || state.teamMatchId !== matchId) return;
   state.teamVersionId = saved.version.id;
   state.teamMatchId = matchId;
   sessionStorage.setItem("kickr.dev.teamVersion", saved.version.id);
@@ -1976,37 +1881,29 @@ async function renderLeagueDetail(id: string): Promise<void> {
 }
 
 async function renderLeagueLeaderboard(id: string): Promise<void> {
+  const currentRoute = location.hash;
   app.innerHTML = shell("League leaderboard", loading());
-  const board = await api<{
-    league: LeagueCard;
-    freshness: string;
-    scoreSnapshotId?: string | null;
-    rows: Array<{ rank: number; wallet: string; milliPoints: number; you: boolean }>;
-  }>(`/leagues/${id}/leaderboard`);
-  const rows = board.rows.map((row) =>
-    lbRowHtml({
-      rank: row.rank,
-      label: shortWallet(row.wallet),
-      milliPoints: row.milliPoints,
-      you: row.you,
-    }),
-  ).join("") || empty("No members yet. Share the invite code to fill this FREE league.");
+  type LeagueBoard = { league: LeagueCard; freshness: string; rows: Array<{ rank: number; wallet: string; milliPoints: number; you: boolean }> };
+  const board = await api<LeagueBoard>(`/leagues/${id}/leaderboard`);
+  if (location.hash !== currentRoute) return;
+  const isFinal = (value: LeagueBoard) => value.league.lifecycleBucket === "completed" || value.freshness === "FINAL";
   app.innerHTML = shell(escapeText(board.league.name), `
-    <div class="lb-head">
-      <div class="meta"><span class="badge badge-free">FREE</span><span>${escapeText(freshnessChipLabel(board.freshness, { demoData: state.demoData }))}</span></div>
-    </div>
-    ${freshnessBannerHtml(board.freshness === "FINAL" ? null : board.freshness, { demoData: state.demoData })}
-    <div class="leaderboard">${rows}</div>
-    <div class="row" style="margin-top:16px">
-      <a class="back-link" href="#/leagues/${id}">← League</a>
-      ${board.league.lifecycleBucket === "completed" || board.freshness === "FINAL" ? '<button class="ghost" id="league-share">Share result</button>' : ""}
-    </div>
-    <div id="share-slot"></div>
-  `);
-  document.querySelector("#league-share")?.addEventListener("click", () => {
-    location.hash = `#/share/league/${id}`;
+    <div class="lb-head"><div class="meta"><span class="badge badge-free">FREE PRIVATE LEAGUE</span></div><span class="board-status" id="board-status" role="status">${isFinal(board) ? "Final result" : "Connecting…"}</span></div>
+    <div id="board-freshness">${freshnessBannerHtml(board.freshness === "FINAL" ? null : board.freshness, { demoData: state.demoData })}</div>
+    <article class="card"><div class="pool-caption"><span>RANK / PLAYER</span><span>POINTS</span></div><div class="leaderboard" id="live-board">${boardRows(board.rows)}</div></article>
+    <div class="row"><a class="back-link" href="#/leagues/${id}">← League</a><a class="ghost" id="league-share" href="#/share/league/${id}" ${isFinal(board) ? "" : "hidden"}>Share result ↗</a></div><div id="share-slot"></div>`);
+  void markLeaderboardViewed();
+  const rows = document.querySelector("#live-board");
+  const freshness = document.querySelector("#board-freshness");
+  if (!isFinal(board)) mountLiveBoard(board.league.matchId, async (signal) => {
+    const next = await api<LeagueBoard>(`/leagues/${id}/leaderboard`, { signal });
+    if (signal.aborted || !rows?.isConnected) return false;
+    rows.innerHTML = boardRows(next.rows);
+    if (freshness) freshness.innerHTML = freshnessBannerHtml(isFinal(next) ? null : next.freshness, { demoData: state.demoData });
+    const share = document.querySelector<HTMLElement>("#league-share");
+    if (share) share.hidden = !isFinal(next);
+    return isFinal(next);
   });
-  markLeaderboardViewed();
 }
 
 async function renderShareContest(contestId: string): Promise<void> {
@@ -2106,7 +2003,6 @@ async function renderProfile(wallet: string | null): Promise<void> {
     })();
   });
 }
-
 
 
 async function renderTutorialInfo(matchId: string): Promise<void> {
@@ -2408,5 +2304,6 @@ async function renderTutorialComplete(matchId: string): Promise<void> {
 }
 
 
+window.addEventListener("pagehide", () => { stopLiveBoard?.(); });
 window.addEventListener("hashchange", () => { void render(); });
 void render();

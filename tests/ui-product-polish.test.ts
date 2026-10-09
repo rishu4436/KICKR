@@ -130,17 +130,17 @@ describe("Phase 17.2 landing + consumer chrome", () => {
   it("renders premium landing with hero CTAs and demo labeling", () => {
     const html = landingPageHtml({ demoData: true, production: true });
     expect(html).toContain("KICKR");
-    expect(html).toContain("Transparent scoring. Verifiable settlement architecture.");
+    expect(html).toContain("Football.<br>With <em>you</em><br>in the game.");
     expect(html).toContain("Play Free");
     expect(html).toContain("Explore Demo");
     expect(html).toContain("How it works");
-    expect(html).toContain("Live Demo Match");
+    expect(html).toContain("ILLUSTRATIVE PREVIEW");
     expect(html).toContain("Build Your XI");
     expect(html).toContain("Live Leaderboards");
-    expect(html).toContain("Private Leagues");
-    expect(html).toContain("Why KICKR");
-    expect(html).toContain("Technology");
-    expect(html).toMatch(/DEMO DATA|Tutorial Match|SIMULATED/);
+    expect(html).toContain("PRIVATE LEAGUES");
+    expect(html).toContain("Know how you score.");
+    expect(html).toContain("THE FOUNDATION");
+    expect(html).toContain("DEMO DATA");
     expect(html).toContain("FREE DEMO");
     expect(html).toContain("Solana");
     expect(html).not.toContain("Claim Prize");
